@@ -1,7 +1,6 @@
 from mapper import Mapper
 from types import Column
 
-
 class MiniBase:
     _registry = {}
 

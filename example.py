@@ -1,82 +1,96 @@
 from base import MiniBase
-from types import Text, Number
+from types import Text, Number, Relationship
 
 
-# Base entity
+# Inheritance examples
 class Person(MiniBase):
     id = Number(pk=True)
     name = Text()
 
 
-# Single-table inheritance: shares parent's table
 class StudentSingle(Person):
     mapper_args = {"inheritance": "single"}
     grade = Number()
 
 
-# Class-table (joined) inheritance: own table with new columns
-class StudentClass(Person):
-    mapper_args = {"inheritance": "class"}
-    grade = Number()
-
-
-# Concrete-table inheritance: own table duplicating inherited columns
-class StudentConcrete(Person):
-    mapper_args = {"inheritance": "concrete"}
-    grade = Number()
-
-
-# Vehicles examples: two subclasses per strategy
 class Vehicle(MiniBase):
     id = Number(pk=True)
     name = Text()
     wheels = Number()
 
 
-# Single-table inheritance
 class CarSingle(Vehicle):
     mapper_args = {"inheritance": "single"}
     doors = Number()
 
 
-class TruckSingle(Vehicle):
+# Relationship examples
+class Department(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+
+
+class Employee(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+    department = Relationship(Department, backref="employees", r_type="many-to-one")
+
+
+class Project(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+    employees = Relationship(Employee, backref="project", r_type="one-to-many")
+
+
+# Relationships with inheritance
+class Company(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+
+
+class TechCompany(Company):
     mapper_args = {"inheritance": "single"}
-    capacity = Number()
-
-class BikeSingle(Vehicle):
-    mapper_args = {"inheritance": "class"}
-    color = Text()
+    tech_stack = Text()
 
 
+class Office(MiniBase):
+    id = Number(pk=True)
+    address = Text()
+    company = Relationship(Company, r_type="many-to-one")
 
 
-def describe(mapper):
-    print(mapper)
-    print(" table:", mapper.table_name)
-    print(" columns:", sorted(mapper.columns))
-    print(" local columns:", sorted(mapper.local_columns))
-    print(" pk:", mapper.pk)
-    print()
-
-
-def single_table_union(root_cls):
-    """Return union of columns for all mappers sharing the root's table (single-table)."""
-    table = root_cls._mapper.table_name
-    cols = {}
-    for mapper in root_cls._registry.values():
-        if mapper.table_name == table:
-            cols |= mapper.columns
-    return cols
+def resolve_all_relationships():
+    from base import MiniBase
+    for cls, mapper in MiniBase._registry.items():
+        mapper._resolve_deferred_relationships()
 
 
 if __name__ == "__main__":
-
-    print("-- Vehicles: single-table --")
-    describe(CarSingle._mapper)
-    describe(TruckSingle._mapper)
-    print("Wspólna tabela:", Vehicle._mapper.table_name)
-    union_cols = single_table_union(Vehicle)
-    print("Wspólne kolumny (unia):", sorted(union_cols))
-    print()
-    describe(BikeSingle._mapper)
+    from base import MiniBase
+    
+    resolve_all_relationships()
+    
+    print("=== Inheritance ===")
+    print(f"Person table: {Person._mapper.table_name}, columns: {list(Person._mapper.columns.keys())}")
+    print(f"StudentSingle table: {StudentSingle._mapper.table_name}, columns: {list(StudentSingle._mapper.columns.keys())}")
+    print(f"Vehicle table: {Vehicle._mapper.table_name}")
+    print(f"CarSingle table: {CarSingle._mapper.table_name} (shares with Vehicle)")
+    
+    print("\n=== Relationships ===")
+    print(f"Employee columns: {list(Employee._mapper.columns.keys())}")
+    fks = [name for name, col in Employee._mapper.columns.items() 
+           if hasattr(col, 'is_foreign_key') and col.is_foreign_key]
+    print(f"Employee FKs: {fks}")
+    
+    print(f"\nProject relationships: {list(Project._mapper.relationships.keys())}")
+    print(f"Employee has project_id FK: {'project_id' in Employee._mapper.columns}")
+    
+    print("\n=== Relationships with Inheritance ===")
+    print(f"Company table: {Company._mapper.table_name}")
+    print(f"TechCompany table: {TechCompany._mapper.table_name} (shares with Company)")
+    office_fk = next((name for name, col in Office._mapper.columns.items() 
+                      if hasattr(col, 'is_foreign_key') and col.is_foreign_key), None)
+    if office_fk:
+        fk_col = Office._mapper.columns[office_fk]
+        print(f"Office FK '{office_fk}' -> {fk_col.target_table} (root table for SINGLE inheritance)")
 
