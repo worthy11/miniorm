@@ -1,4 +1,4 @@
-from types import Relationship, ForeignKey
+from orm_types import Relationship, ForeignKey
 
 class Mapper:
     def __init__(self, cls, columns, mapper_args):
@@ -61,6 +61,9 @@ class Mapper:
         if not self.parent:
             self.columns = dict(self.declared_columns)
             self.local_columns = dict(self.declared_columns)
+            from orm_types import Text
+            self.columns["type"] = Text(nullable=False, default=self.cls.__name__)
+            self.local_columns["type"] = Text(nullable=False, default=self.cls.__name__)
             return
 
         parent_cols = dict(self.parent.columns)

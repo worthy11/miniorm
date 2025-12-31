@@ -1,5 +1,5 @@
 from base import MiniBase
-from types import Text, Number, Relationship
+from orm_types import Text, Number, Relationship
 
 
 # Inheritance examples
