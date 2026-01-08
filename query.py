@@ -52,6 +52,36 @@ class Query:
         self._join_class = target_class
         #TO DO 
         return self
+    
+
+    def join_m2m(self, assoc_table, local_key, remote_key, local_id):
+        target_mapper = self.model_class._mapper
+        target_table = target_mapper.table_name
+        target_pk = target_mapper.pk
+        
+        sql = (f'SELECT t.* FROM "{target_table}" AS t '
+               f'JOIN "{assoc_table}" AS a ON t."{target_pk}" = a."{remote_key}" '
+               f'WHERE a."{local_key}" = ?')
+        
+        rows = self.session.engine.execute(sql, (local_id,))
+        
+        results = []
+        for row in rows:
+            pk_val = row[target_pk]
+            existing = self.session.identity_map.get(self.model_class, pk_val)
+            if existing:
+                results.append(existing)
+            else:
+                obj = self.model_class()
+                for key, val in row.items():
+                    object.__setattr__(obj, key, val)
+                object.__setattr__(obj, '_orm_state', "PERSISTENT")
+                object.__setattr__(obj, '_session', self.session)
+                self.session.identity_map.add(self.model_class, pk_val, obj)
+                results.append(obj)
+        
+        self._results = results
+        return self
 
     
     def _hydrate(self, row, column_names, base_mapper):
