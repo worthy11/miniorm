@@ -1,5 +1,6 @@
 from states import ObjectState
 from identity_map import IdentityMap
+from dependency_graph import DependencyGraph
 from base import MiniBase 
 from query import Query
 
@@ -11,6 +12,7 @@ class Session:
         self._new = set()
         self._deleted = set()
         self._dirty = set()
+        self._snapshots = {}
 
     def query(self, model_class):
         return Query(model_class, self)
@@ -24,66 +26,127 @@ class Session:
         mapper = MiniBase._registry.get(model_class)
         return self.query(model_class).filter(**{mapper.pk: pk}).first()
     
-    def mark_dirty(self, instance):
-        if hasattr(instance, '_orm_state') and instance._orm_state == ObjectState.PERSISTENT:
-            self._dirty.add(instance)
+    def _take_snapshot(self, instance):
+        mapper = instance._mapper
+        state = {name: getattr(instance, name) for name in mapper.columns if hasattr(instance, name)}
+        self._snapshots[id(instance)] = state
+
+
+    def _get_dirty_objects(self):
+        dirty = []
+        for obj in self.identity_map._map.values():
+            if getattr(obj, '_orm_state', None) != ObjectState.PERSISTENT:
+                continue
+            
+            old_state = self._snapshots.get(id(obj))
+            if old_state is None: continue
+            
+            for key, old_val in old_state.items():
+                if getattr(obj, key) != old_val:
+                    dirty.append(obj)
+                    break
+        return dirty
+    
 
     def add(self, instance):
+        if getattr(instance, '_orm_state', None) == ObjectState.PENDING:
+            return
+
+        mapper = getattr(instance, '_mapper', None)
+        if mapper is None:
+            return
+
         state = getattr(instance, '_orm_state', ObjectState.TRANSIENT)
     
         if state == ObjectState.DELETED:
             if instance in self._deleted:
                 self._deleted.remove(instance)
             object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
-            self.mark_dirty(instance)
             return
 
         if state == ObjectState.TRANSIENT:
-            instance._orm_state = ObjectState.PENDING
-            instance._session = self
+            object.__setattr__(instance, '_orm_state', ObjectState.PENDING)
+            object.__setattr__(instance, '_session', self)
             self._new.add(instance)
-        mapper = MiniBase._registry.get(instance.__class__)
+
         for rel_name, rel in mapper.relationships.items():
-            if rel.r_type == "one-to-many":
-                children = getattr(instance, rel_name, [])
-                for child in children:
-                    self.add(child)
+            val = instance.__dict__.get(rel_name)
+            
+            if val is None:
+                continue
+
+            if rel.r_type in ("many-to-one", "one-to-one"):
+                self.add(val)
+            elif rel.r_type in ("one-to-many", "many-to-many") and isinstance(val, list):
+                for item in val:
+                    self.add(item)
 
     def delete(self, instance):
         if hasattr(instance, '_orm_state') and instance._orm_state == ObjectState.PERSISTENT:
             instance._orm_state = ObjectState.DELETED
             self._deleted.add(instance)
 
-    def flush(self): # TO DO: tutaj powinno się brać po grafie zależności 
+    def flush(self):
+        if not (self._new or self._dirty or self._deleted):
+            return
+
+        actual_dirty = self._get_dirty_objects()
+        self._dirty.update(actual_dirty)
+        
+        to_insert = list(self._new)
+        to_update = list(self._dirty)
+        objects_to_snapshot = set(to_insert + to_update)
+        
         try:
-            new_objects = list(self._new)
-            new_objects.sort(key=lambda obj: len([
-                col for col in MiniBase._registry[obj.__class__].columns.values() 
-                if hasattr(col, 'is_foreign_key') and col.is_foreign_key
-            ]))
+            if objects_to_snapshot:
+                save_graph = DependencyGraph(objects_to_snapshot)
+                save_plan = save_graph.sort()
 
-            for obj in new_objects:
-                self._perform_insert(obj)
+                for obj in save_plan:
+                    self._sync_foreign_keys(obj)
+                    if obj in self._new:
+                        self._perform_insert(obj)
+                    elif obj in self._dirty:
+                        self._perform_update(obj)
 
-            for obj in list(self._dirty):
-                self._perform_update(obj)
+            for obj in objects_to_snapshot:
+                self._flush_m2m(obj, obj._mapper)
 
-            deleted_objects = list(self._deleted)
-            deleted_objects.sort(key=lambda obj: len([
-                col for col in MiniBase._registry[obj.__class__].columns.values() 
-                if hasattr(col, 'is_foreign_key') and col.is_foreign_key
-            ]), reverse=True)
+            if self._deleted:
+                delete_graph = DependencyGraph(self._deleted)
+                delete_plan = reversed(delete_graph.sort())
+                for obj in delete_plan:
+                    self._perform_delete(obj)
+                    self._snapshots.pop(id(obj), None)
 
-            for obj in deleted_objects:
-                self._perform_delete(obj)
+            for obj in objects_to_snapshot:
+                if getattr(obj, '_orm_state', None) == ObjectState.PERSISTENT:
+                    self._take_snapshot(obj)
                 
         except Exception as e:
             self.rollback()
-            raise RuntimeError(f"Błąd podczas operacji flush: {str(e)}")
+            raise RuntimeError(f"Krytyczny błąd synchronizacji Unit of Work: {e}")
+        
+    def _sync_foreign_keys(self, obj):
+        mapper = obj._mapper
+        for rel_name, rel in mapper.relationships.items():
+            if rel.r_type == "many-to-one":
+                parent = getattr(obj, rel_name, None)
+                from orm_types import Relationship
+                if parent is None or isinstance(parent, Relationship):
+                    continue
+
+                if hasattr(parent, '_mapper'):
+                    parent_mapper = parent._mapper
+                    parent_pk_val = getattr(parent, parent_mapper.pk, None)
+                    
+                    if parent_pk_val is not None:
+                        object.__setattr__(obj, rel._resolved_fk_name, parent_pk_val)
         
     def _perform_insert(self, obj):
         mapper = MiniBase._registry.get(obj.__class__)
-        sql, params = self.query_builder.build_insert(mapper, obj)
+        data = self._prepare_data(obj, mapper)
+        sql, params = self.query_builder.build_insert(mapper, data)
         new_id = self.engine.execute_insert(sql, params)
         object.__setattr__(obj, mapper.pk, new_id)
         object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
@@ -92,7 +155,9 @@ class Session:
 
     def _perform_update(self, obj):
         mapper = MiniBase._registry.get(obj.__class__)
-        sql, params = self.query_builder.build_update(mapper, obj)
+        data = self._prepare_data(obj, mapper)
+        pk_val = getattr(obj, mapper.pk)
+        sql, params = self.query_builder.build_update(mapper, data, pk_val)
         self.engine.execute(sql, params)
         self._dirty.remove(obj)
 
@@ -103,6 +168,20 @@ class Session:
         self.engine.execute(sql, params)
         self.identity_map.remove(obj.__class__, pk_val)
         self._deleted.remove(obj)
+
+
+    def _prepare_data(self, obj, mapper):
+        data = {}
+        fields = mapper.columns.keys() if mapper.inheritance == "SINGLE" else mapper.local_columns.keys()
+        
+        for f in fields:
+            if f == mapper.pk:
+                continue
+            if f == "type":
+                data[f] = obj.__class__.__name__
+            else:
+                data[f] = getattr(obj, f, None)
+        return data
     
     
     def _autoflush(self):
@@ -110,25 +189,30 @@ class Session:
             self.engine.logger.info("[AUTOFLUSH] Synchronizacja...")
             self.flush()
         
-    def _flush_m2m(self, instance, mapper): #to do
+    def _flush_m2m(self, instance, mapper):  #To do
         for name, rel in mapper.relationships.items():
             if rel.r_type == "many-to-many":
-                collection = getattr(instance, name, [])
+                collection = instance.__dict__.get(name, [])
+                
                 for target_obj in collection:
-                    if getattr(target_obj, '_orm_state', None) == ObjectState.PENDING:
+                    if getattr(target_obj, '_orm_state', None) == ObjectState.TRANSIENT:
                         self.add(target_obj)
-                        self.flush()
-
-                    target_mapper = MiniBase._registry.get(target_obj.__class__)
                     
-                    sql, params = self.query_builder.build_m2m_insert(
-                        rel.association_table,
-                        getattr(instance, mapper.pk),
-                        getattr(target_obj, target_mapper.pk),
-                        rel._resolved_local_key,
-                        rel._resolved_remote_key
-                    )
-                    self.engine.execute(sql, params)
+                    local_id = getattr(instance, mapper.pk, None)
+                    target_mapper = getattr(target_obj, '_mapper', None)
+                    remote_id = getattr(target_obj, target_mapper.pk, None) if target_mapper else None
+                    if local_id is not None and remote_id is not None:
+                        sql, params = self.query_builder.build_m2m_insert(
+                            rel.association_table,
+                            local_id,
+                            remote_id,
+                            rel._resolved_local_key,
+                            rel._resolved_remote_key
+                        )
+                        try:
+                            self.engine.execute(sql, params)
+                        except Exception:
+                            continue
 
     def commit(self):
         try:
@@ -160,22 +244,30 @@ class Session:
             object.__setattr__(instance, '_orm_state', ObjectState.TRANSIENT)
 
     def rollback(self):
+        """Cofa transakcję w bazie i przywraca spójność obiektów w pamięci."""
         self.engine.rollback()
-        self.engine.logger.warning("[TRANSACTION]: Rollback wykonany")
+        self.engine.logger.warning("[TRANSACTION]: Rollback wykonany. Przywracanie stanu obiektów...")
+
+        for obj in list(self._new):
+            mapper = obj._mapper
+            object.__setattr__(obj, mapper.pk, None)
+            object.__setattr__(obj, '_orm_state', ObjectState.TRANSIENT)
 
         for obj in list(self._deleted):
-            mapper = MiniBase._registry.get(obj.__class__)
+            mapper = obj._mapper
             pk_val = getattr(obj, mapper.pk)
             self.identity_map.add(obj.__class__, pk_val, obj)
             object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
-        
+
         for obj in self.identity_map._map.values():
-            object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
-            
+            if getattr(obj, '_orm_state', None) != ObjectState.TRANSIENT:
+                object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
+
         self._new.clear()
         self._dirty.clear()
         self._deleted.clear()
-        self.engine.logger.warning("[TRANSACTION]: Rollback wykonany i przywrócono obiekty.")
+        
+        self.engine.logger.warning("[TRANSACTION]: Stan sesji zresetowany.")
 
 
     def close(self):
