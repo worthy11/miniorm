@@ -23,8 +23,15 @@ class MiniBase:
             if isinstance(dtype, Column)
         }
 
-        mapper_args = getattr(cls, "mapper_args", None)
-        cls._mapper = Mapper(cls, columns, mapper_args)
+        # Extract Meta class attributes
+        meta_cls = getattr(cls, "Meta", None)
+        meta_attrs = {}
+        if meta_cls:
+            for attr in dir(meta_cls):
+                if not attr.startswith('_'):
+                    meta_attrs[attr] = getattr(meta_cls, attr)
+        
+        cls._mapper = Mapper(cls, columns, meta_attrs)
         MiniBase._registry[cls] = cls._mapper
 
     def __getattribute__(self, name):

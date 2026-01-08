@@ -1,9 +1,21 @@
 from orm_types import Relationship, ForeignKey
+from inheritance import STRATEGIES
 
 class Mapper:
-    def __init__(self, cls, columns, mapper_args):
+    def __init__(self, cls, columns, meta_attrs):
         self.cls = cls
-        self.table_name = getattr(cls, "__tablename__", cls.__name__.lower() + "s")
+        self.meta = meta_attrs or {}
+        self.abstract = self.meta.get("abstract", False)
+        self.discriminator = self.meta.get("discriminator", "type")
+        self.discriminator_value = self.meta.get("discriminator_value", cls.__name__)
+        
+        # Table name resolution: Meta.table_name > __tablename__ > default
+        self.table_name = (
+            self.meta.get("table_name") or
+            getattr(cls, "__tablename__", None) or
+            cls.__name__.lower() + "s"
+        )
+        
         self.pk = None
         self.parent = None
         self.inheritance = None
@@ -11,7 +23,6 @@ class Mapper:
         self.columns = {}
         self.local_columns = {}
         self.relationships = {}
-        self.args = mapper_args or {}
 
         self.resolve_parent()
         self.resolve_inheritance()
@@ -22,7 +33,7 @@ class Mapper:
     def __repr__(self):
         cols = ", ".join(self.columns.keys())
         pk = self.pk if self.pk else "None"
-        inherit = self.inheritance
+        inherit = self.inheritance.name if self.inheritance else "None"
         parent = self.parent.cls.__name__ if self.parent else "None"
         return (
             f"<Mapper class={self.cls.__name__} table={self.table_name} "
@@ -40,47 +51,36 @@ class Mapper:
             self.inheritance = None
             return None
 
-        requested = (self.args or {}).get("inheritance")
+        requested = self.meta.get("inheritance")
         if requested:
             requested = requested.upper()
         else:
-            requested = self.parent.inheritance or "SINGLE"
+            requested = (self.parent.inheritance.name if self.parent.inheritance else "SINGLE")
 
-        if requested not in {"SINGLE", "CLASS", "CONCRETE"}:
+        if requested not in STRATEGIES:
             raise ValueError("Unknown inheritance strategy: %s" % requested)
 
-        if self.parent.inheritance and self.parent.inheritance != requested:
+        if self.parent.inheritance and self.parent.inheritance.name != requested:
             raise ValueError(
                 f"Inheritance mismatch between {self.cls.__name__} and parent {self.parent.cls.__name__}"
             )
 
-        self.inheritance = requested
-        return requested
+        self.inheritance = STRATEGIES[requested]
+        return self.inheritance
 
     def resolve_columns(self):
         if not self.parent:
             self.columns = dict(self.declared_columns)
             self.local_columns = dict(self.declared_columns)
             from orm_types import Text
-            self.columns["type"] = Text(nullable=False, default=self.cls.__name__)
-            self.local_columns["type"] = Text(nullable=False, default=self.cls.__name__)
+            self.columns[self.discriminator] = Text(nullable=False, default=self.discriminator_value)
+            self.local_columns[self.discriminator] = Text(nullable=False, default=self.discriminator_value)
             return
 
-        parent_cols = dict(self.parent.columns)
-
-        if self.inheritance == "SINGLE":
-            self.table_name = self.parent.table_name
-            self.local_columns = dict(self.declared_columns)
-            merged = parent_cols | self.declared_columns
-            self.columns = merged
-        elif self.inheritance == "CLASS":
-            self.local_columns = dict(self.declared_columns)
-            merged = parent_cols | self.declared_columns
-            self.columns = merged
-        elif self.inheritance == "CONCRETE":
-            self.local_columns = parent_cols | self.declared_columns
-            self.columns = dict(self.local_columns)
+        if self.inheritance:
+            self.inheritance.apply_columns(self, self.parent)
         else:
+            parent_cols = dict(self.parent.columns)
             self.local_columns = dict(self.declared_columns)
             self.columns = parent_cols | self.declared_columns
 
@@ -194,18 +194,8 @@ class Mapper:
         return None
     
     def _get_target_table(self, target_mapper):
-        if target_mapper.inheritance == "SINGLE":
-            root = target_mapper
-            while root.parent and root.inheritance == "SINGLE":
-                root = root.parent
-            return root.table_name
-        
-        if target_mapper.inheritance == "CLASS":
-            root = target_mapper
-            while root.parent:
-                root = root.parent
-            return root.table_name
-        
+        if target_mapper.inheritance:
+            return target_mapper.inheritance.target_table(target_mapper)
         return target_mapper.table_name
     
     def _get_target_pk(self, target_mapper):

@@ -4,23 +4,37 @@ from orm_types import Text, Number, Relationship
 
 # Inheritance examples
 class Person(MiniBase):
+    class Meta:
+        table_name = "people"
+        discriminator = "type"
+        discriminator_value = "person"
+    
     id = Number(pk=True)
     name = Text()
 
 
 class StudentSingle(Person):
-    mapper_args = {"inheritance": "single"}
+    class Meta:
+        inheritance = "single"
+        discriminator_value = "student"
+    
     grade = Number()
 
 
 class Vehicle(MiniBase):
+    class Meta:
+        table_name = "vehicles"
+    
     id = Number(pk=True)
     name = Text()
     wheels = Number()
 
 
 class CarSingle(Vehicle):
-    mapper_args = {"inheritance": "single"}
+    class Meta:
+        inheritance = "single"
+        discriminator_value = "car"
+    
     doors = Number()
 
 
@@ -44,12 +58,18 @@ class Project(MiniBase):
 
 # Relationships with inheritance
 class Company(MiniBase):
+    class Meta:
+        table_name = "companies"
+    
     id = Number(pk=True)
     name = Text()
 
 
 class TechCompany(Company):
-    mapper_args = {"inheritance": "single"}
+    class Meta:
+        inheritance = "single"
+        discriminator_value = "tech_company"
+    
     tech_stack = Text()
 
 

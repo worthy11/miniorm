@@ -1,14 +1,14 @@
 class QueryBuilder:
     def build_insert(self, mapper, instance):
-        if mapper.inheritance == "SINGLE":
+        if mapper.inheritance and mapper.inheritance.name == "SINGLE":
             fields = [name for name in mapper.columns.keys() if name != mapper.pk]
         else:
             fields = [name for name in mapper.local_columns.keys() if name != mapper.pk]
         
         values = []
         for f in fields:
-            if f == "type":
-                values.append(instance.__class__.__name__)
+            if f == mapper.discriminator:
+                values.append(mapper.discriminator_value)
             else:
                 values.append(getattr(instance, f, None))
         
@@ -51,8 +51,8 @@ class QueryBuilder:
         
         values = []
         for f in fields:
-            if f == "type":
-                values.append(instance.__class__.__name__)
+            if f == mapper.discriminator:
+                values.append(mapper.discriminator_value)
             else:
                 values.append(getattr(instance, f, None))
                 
