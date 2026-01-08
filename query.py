@@ -8,7 +8,7 @@ class Query:
         self.filters = {}
         self._limit = None
         self._offset = None
-        self._join_class = None
+        self._joins = []
 
     def filter(self, **kwargs):
         self.filters.update(kwargs)
@@ -23,7 +23,7 @@ class Query:
             self.session._autoflush()
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
-            mapper, self.filters, limit=self._limit, offset=self._offset
+            mapper, self.filters, limit=self._limit, offset=self._offset, joins=self._joins
         )
         
         rows = self.session.engine.execute(sql, params)
@@ -40,21 +40,24 @@ class Query:
     def first(self):
         self.limit(1)
         results = self.all()
-        # if not results:
-        #     null_obj = self.model_class()
-        #     for col in self.model_class._mapper.columns:
-        #         setattr(null_obj, col, "None")
-        #     return null_obj
-        # return results[0]
-        return results[0] if results else None
+        if not results:
+            return None
+        obj = results[0]
+        if getattr(obj, '_orm_state', None) == ObjectState.DELETED:
+            return None
+        return obj
     
-    def join(self, target_class):
-        self._join_class = target_class
-        #TO DO 
+    def join(self, relationship_name):
+        mapper = self.model_class._mapper
+        if relationship_name not in mapper.relationships:
+            raise AttributeError(f"Model {self.model_class.__name__} nie ma relacji {relationship_name}")
+        
+        rel = mapper.relationships[relationship_name]
+        self._joins.append(rel)
         return self
     
-
-    def join_m2m(self, assoc_table, local_key, remote_key, local_id):
+ 
+    def join_m2m(self, assoc_table, local_key, remote_key, local_id):   #To do
         target_mapper = self.model_class._mapper
         target_table = target_mapper.table_name
         target_pk = target_mapper.pk
@@ -87,8 +90,12 @@ class Query:
     def _hydrate(self, row, column_names, base_mapper):
         target_cls = self.model_class
         if "type" in column_names:
-            class_name = row[column_names.index("type")]
-            target_cls = next((c for c in MiniBase._registry if c.__name__ == class_name), target_cls)
+            try:
+                type_idx = column_names.index("type")
+                class_name = row[type_idx]
+                target_cls = next((c for c in MiniBase._registry if c.__name__ == class_name), target_cls)
+            except (ValueError, IndexError):
+                pass
 
         pk_val = row[column_names.index(base_mapper.pk)]
         existing = self.session.identity_map.get(target_cls, pk_val)

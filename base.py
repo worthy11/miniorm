@@ -28,8 +28,14 @@ class MiniBase:
         MiniBase._registry[cls] = cls._mapper
 
     def __getattribute__(self, name):
-        if name.startswith('_') or name == 'id':
+        if name.startswith('_') or name == 'id' or name == 'mapper_args':
             return object.__getattribute__(self, name)
+        
+        state = object.__getattribute__(self, '_orm_state')
+        if state == ObjectState.EXPIRED:
+            session = object.__getattribute__(self, '_session')
+            if session:
+                session.refresh(self)
 
         mapper = object.__getattribute__(self, '_mapper')
         
@@ -46,7 +52,7 @@ class MiniBase:
 
         return object.__getattribute__(self, name)
 
-    def _load_relationship(self, session, rel):
+    def _load_relationship(self, session, rel):   #To do
         from states import ObjectState
         
         if rel.r_type == "many-to-one":
@@ -66,15 +72,12 @@ class MiniBase:
         return None
     
     def __setattr__(self, name, value):
-        is_column = name in self._mapper.columns
-        
         object.__setattr__(self, name, value)
-
-        state = getattr(self, '_orm_state', None)
-        if is_column and state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
-            session = getattr(self, '_session', None)
-            if session:
-                object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
-                session.mark_dirty(self)
+        if not name.startswith('_'):
+            mapper = getattr(self, '_mapper', None)
+            if mapper and name in mapper.columns:
+                state = getattr(self, '_orm_state', None)
+                if state == ObjectState.EXPIRED:
+                    object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
 
         #TO DO: relacje many to many, one to one

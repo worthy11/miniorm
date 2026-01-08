@@ -12,7 +12,6 @@ class SchemaGenerator:
         return f'"{identifier}"'
     
     def create_all(self, engine, registry):
-        """Automatycznie tworzy wszystkie tabele z rejestru oraz tabele M2M."""
         created_tables = set()
         
         for model_class, mapper in registry.items():

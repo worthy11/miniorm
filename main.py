@@ -211,6 +211,10 @@ def test_security_and_m2m_optimized():
             print(f"BŁĄD: System wygenerował zapytanie! {sql}")
         except ValueError as e:
             print(f"SUKCES: System zablokował niebezpieczną nazwę: {e}")
+        finally:
+        # Musimy posprzątać w rejestrze, żeby inne testy nie wybuchały
+            if HackedModel in MiniBase._registry:
+                del MiniBase._registry[HackedModel]
 
         print("\n--- 12. Test: Many-To-Many bez duplikowania i rekurencji ---")
         # Tutaj testujemy Twoją nową, zoptymalizowaną metodę _flush_m2m
@@ -282,9 +286,123 @@ def test_lazy_loading_full():
         print(f"3. One-to-Many OK: {colleagues}")
 
     
+def test_unit_of_work_snapshots():
+    print("\n--- 13. Test: Snapshoty i Auto-Refresh (EXPIRED) ---")
+    engine = DatabaseEngine()
+    builder = QueryBuilder()
+    generator = SchemaGenerator()
+    generator.create_all(engine, MiniBase._registry)
+
+    with Session(engine, builder) as session:
+        d1 = Department(name="R&D")
+        session.add(d1)
+        session.commit() # Obiekt d1 staje się EXPIRED
+
+        print(f"Stan obiektu po commit: {d1._orm_state}")
+        
+        # To wywoła __getattribute__ -> session.refresh()
+        print(f"Dociąganie nazwy (Lazy Refresh): {d1.name}")
+        print(f"Stan po refreshu: {d1._orm_state}")
+
+        # Test Dirty Checkingu: zmieniamy na to samo
+        d1.name = "R&D"
+        # Jeśli snapshot działa, flush nie powinien wygenerować UPDATE
+        print("Wykonuję flush (nie powinno być SQL UPDATE, bo nazwa ta sama)...")
+        session.flush()
+
+        # Zmieniamy faktycznie
+        d1.name = "Research and Development"
+        print("Wykonuję flush (powinien być SQL UPDATE)...")
+        session.flush()
+
+def test_polymorphic_loading():
+    print("\n--- 14. Test: Polimorficzne ładowanie (STI) ---")
+    from example import Person, StudentSingle
+    engine = DatabaseEngine()
+    builder = QueryBuilder()
+    generator = SchemaGenerator()
+    generator.create_all(engine, MiniBase._registry)
+
+    with Session(engine, builder) as session:
+        s1 = StudentSingle(name="Student Jan", grade=5)
+        session.add(s1)
+        session.commit()
+
+    with Session(engine, builder) as session:
+        # Pobieramy przez klasę bazową Person
+        person = session.query(Person).filter(name="Student Jan").first()
+        print(f"Pobrano obiekt klasy: {type(person).__name__}")
+        if isinstance(person, StudentSingle):
+            print(f"Sukces: Polimorfizm działa, ocena: {person.grade}")
+        else:
+            print("Błąd: System nie rozpoznał klasy potomnej!")
+
+
+def test_circular_dependency_error():
+    print("\n--- 15. Test: Wykrywanie cykli w grafie ---")
+    engine = DatabaseEngine()
+    builder = QueryBuilder()
+    generator = SchemaGenerator()
+    generator.create_all(engine, MiniBase._registry)
+
+    with Session(engine, builder) as session:
+        d1 = Department(name="Loop Dept")
+        e1 = Employee(name="Loop Emp")
+        
+        # 1. Kierunek: Employee -> Department (FK w Employee)
+        e1.department = d1
+        
+        # 2. Kierunek: Department -> Employee (FK w Department)
+        # Aby graf to wykrył, musimy zasymulować relację Many-To-One w Departamencie
+        from orm_types import Relationship
+        circular_rel = Relationship(target=Employee, r_type="many-to-one")
+        circular_rel._resolved_target = Employee
+        circular_rel._resolved_fk_name = "manager_id"
+        
+        # Wstrzykujemy relację do mappera tylko dla tego testu
+        Department._mapper.relationships["manager"] = circular_rel
+        d1.manager = e1
+        
+        try:
+            print("Próba zapisu cyklicznie zależnych obiektów...")
+            session.add(e1)
+            session.add(d1)
+            session.flush() # To wywoła sortowanie i powinno rzucić RuntimeError
+            print("BŁĄD: System nie wykrył cyklu i próbował wysłać SQL!")
+        except RuntimeError as e:
+            print(f"SUKCES: Graf wykrył cykl i zablokował zapis: {e}")
+        finally:
+            # Sprzątamy po "wstrzykniętej" relacji, by nie psuć innych testów
+            if "manager" in Department._mapper.relationships:
+                del Department._mapper.relationships["manager"]
+
+def test_builder_universality():
+    print("\n--- 16. Test: Uniwersalny Builder ---")
+    engine = DatabaseEngine()
+    builder = QueryBuilder()
+    
+    # Tworzymy mock mappera i dane
+    class MockMapper:
+        table_name = "test_table"
+        pk = "id"
+    
+    data = {"name": "Test", "value": 123, "type": "MockType"}
+    sql, params = builder.build_insert(MockMapper(), data)
+    
+    print(f"Wygenerowany SQL: {sql}")
+    if "type" in sql and "?" in sql:
+        print("SUKCES: Builder poprawnie generuje zapytania ze słowników.")
+    else:
+        print("BŁĄD: SQL Buildera jest niepoprawny.")
+
+
 
 
 if __name__ == "__main__":
     test_complex_scenarios()
     test_security_and_m2m_optimized()
     # test_lazy_loading_full()
+    test_unit_of_work_snapshots()
+    # test_polymorphic_loading()
+    test_circular_dependency_error()
+    test_builder_universality()

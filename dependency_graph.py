@@ -2,7 +2,7 @@ from collections import deque
 
 class DependencyGraph:
     def __init__(self, objects):
-        self.nodes = list(set(objects))
+        self.nodes = set(objects)
 
     def add_object(self, obj):
         self.nodes.add(obj)
@@ -33,6 +33,7 @@ class DependencyGraph:
                     queue.append(v)
 
         if len(sorted_list) != len(self.nodes):
-            return list(self.nodes)
+            cyclic_nodes = [obj for obj in self.nodes if in_degree[obj] > 0]
+            raise RuntimeError(f"Wykryto cykl w zależnościach obiektów: {cyclic_nodes}")
             
         return sorted_list
