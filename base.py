@@ -88,6 +88,7 @@ class MiniBase:
         if mapper and name == mapper.pk:
             current_id = self.__dict__.get(name)
             state = getattr(self, '_orm_state', None)
+            
             if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED) and current_id is not None:
                 if current_id != value:
                     raise AttributeError(
@@ -96,7 +97,7 @@ class MiniBase:
                     )
 
         object.__setattr__(self, name, value)
-        
+
         if not name.startswith('_') and mapper and name in mapper.columns:
             if getattr(self, '_orm_state', None) == ObjectState.EXPIRED:
                 object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)

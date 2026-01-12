@@ -455,16 +455,20 @@ def test_advanced_orm_features():
     # SCENARIUSZ 3: Złożone Filtrowanie i Paginacja
     print("\n--- Scenariusz 3: Filtrowanie + Paginacja ---")
     with Session(engine, builder) as session:
-        # Dodajemy kilku pracowników dla testu
+        # Czyścimy dla pewności i dodajemy 5 pracowników
         for i in range(5):
             session.add(Employee(name=f"Worker {i}"))
         session.commit()
         
-        # Filtrujemy i ograniczamy wyniki
+        # Oczekujemy dokładnie rekordów 3 i 4 (indeksy 2, 3 od początku listy tych z NULL)
         results = session.query(Employee).filter(department_id=None).limit(3).offset(2).all()
-        print(f"Pobrano {len(results)} rekordów (Limit 3, Offset 2).")
-        if len(results) <= 3:
-            print("SUKCES: Paginacja działa poprawnie.")
+        
+        print(f"Pobrano {len(results)} rekordów (Oczekiwano: 3).")
+        # Sceptyczne sprawdzenie:
+        if len(results) == 3:
+            print("SUKCES: Paginacja i filtrowanie IS NULL działają.")
+        else:
+            print(f"BŁĄD: Paginacja zwróciła niewłaściwą liczbę wyników: {len(results)}")
 
     # SCENARIUSZ 4: Stabilność stanów po Rollbacku
     print("\n--- Scenariusz 4: Karuzela stanów (Rollback test) ---")

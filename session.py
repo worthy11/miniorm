@@ -69,7 +69,7 @@ class Session:
 
         pk_val = instance.__dict__.get(mapper.pk)
         
-        if pk_val is not None and not hasattr(pk_val, 'column_type'):
+        if pk_val is not None :
             if not self.identity_map.get(instance.__class__, pk_val):
                 object.__setattr__(instance, '_session', self)
                 object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)

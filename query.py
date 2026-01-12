@@ -109,8 +109,9 @@ class Query:
             return existing
 
         obj = target_cls()
+        target_mapper = target_cls._mapper
         for name, value in row_dict.items():
-            if name in target_cls._mapper.columns:
+            if name in target_mapper.columns:
                 object.__setattr__(obj, name, value)
 
         object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
