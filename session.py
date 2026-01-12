@@ -28,21 +28,32 @@ class Session:
     
     def _take_snapshot(self, instance):
         mapper = instance._mapper
-        state = {name: getattr(instance, name) for name in mapper.columns if hasattr(instance, name)}
-        self._snapshots[id(instance)] = state
+        pk_val = getattr(instance, mapper.pk, None)
+        if pk_val is not None:
+            key = (instance.__class__, pk_val)
+            state = {
+                name: instance.__dict__.get(name) 
+                for name in mapper.columns 
+                if name in instance.__dict__
+            }
+            self._snapshots[key] = state
 
 
     def _get_dirty_objects(self):
         dirty = []
-        for obj in self.identity_map._map.values():
-            if getattr(obj, '_orm_state', None) != ObjectState.PERSISTENT:
+        print(f"DEBUG: Sprawdzam IdentityMap, rozmiar: {len(self.identity_map._map)}")
+        
+        for key, obj in self.identity_map._map.items():
+            old_state = self._snapshots.get(key)
+            
+            if not old_state:
+                print(f"DEBUG: Brak snapshota dla obiektu {obj}")
                 continue
             
-            old_state = self._snapshots.get(id(obj))
-            if old_state is None: continue
-            
-            for key, old_val in old_state.items():
-                if getattr(obj, key) != old_val:
+            for attr, old_val in old_state.items():
+                current_val = obj.__dict__.get(attr)
+                if current_val != old_val:
+                    print(f"DEBUG: Zmiana wykryta w {obj}: {attr} '{old_val}' -> '{current_val}'")
                     dirty.append(obj)
                     break
         return dirty
@@ -87,10 +98,13 @@ class Session:
             self._deleted.add(instance)
 
     def flush(self):
+        actual_dirty = self._get_dirty_objects()
+        self._dirty.update(actual_dirty)
         if not (self._new or self._dirty or self._deleted):
             return
 
         actual_dirty = self._get_dirty_objects()
+        print(f"DEBUG: Dirty objects found: {actual_dirty}")
         self._dirty.update(actual_dirty)
         
         to_insert = list(self._new)
@@ -151,6 +165,7 @@ class Session:
         object.__setattr__(obj, mapper.pk, new_id)
         object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
         self.identity_map.add(obj.__class__, new_id, obj)
+        print(f"DEBUG: Dodano do IM: {obj.__class__} id={new_id}")
         self._new.remove(obj)
 
     def _perform_update(self, obj):
@@ -162,23 +177,29 @@ class Session:
         self._dirty.remove(obj)
 
     def _perform_delete(self, obj):
-        mapper = MiniBase._registry.get(obj.__class__)
+        mapper = obj._mapper
         pk_val = getattr(obj, mapper.pk)
         sql, params = self.query_builder.build_delete(mapper, pk_val)
         self.engine.execute(sql, params)
+        
+        snapshot_key = (obj.__class__, pk_val)
+        self._snapshots.pop(snapshot_key, None)
+        
         self.identity_map.remove(obj.__class__, pk_val)
-        self._deleted.remove(obj)
+        object.__setattr__(obj, '_orm_state', ObjectState.DELETED)
 
 
     def _prepare_data(self, obj, mapper):
         data = {}
-        fields = mapper.columns.keys() if mapper.inheritance == "SINGLE" else mapper.local_columns.keys()
+        is_single = mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE"
+        
+        fields = mapper.columns.keys() if is_single else mapper.local_columns.keys()
         
         for f in fields:
             if f == mapper.pk:
                 continue
-            if f == "type":
-                data[f] = obj.__class__.__name__
+            if f == mapper.discriminator:
+                data[f] = mapper.discriminator_value
             else:
                 data[f] = getattr(obj, f, None)
         return data
@@ -219,6 +240,7 @@ class Session:
             self.flush()
             self.engine.commit()
             for obj in self.identity_map._map.values():
+                self._take_snapshot(obj)
                 object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
             
             self.engine.logger.info("[TRANSACTION]: Commit i wygaszenie (EXPIRE) obiektów.")
@@ -240,16 +262,23 @@ class Session:
             for name in mapper.columns.keys():
                 object.__setattr__(instance, name, row[name])
             object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
+            self._take_snapshot(instance)
         else:
             object.__setattr__(instance, '_orm_state', ObjectState.TRANSIENT)
 
+            
+
     def rollback(self):
-        """Cofa transakcję w bazie i przywraca spójność obiektów w pamięci."""
         self.engine.rollback()
         self.engine.logger.warning("[TRANSACTION]: Rollback wykonany. Przywracanie stanu obiektów...")
 
         for obj in list(self._new):
             mapper = obj._mapper
+            pk_val = getattr(obj, mapper.pk, None)
+            
+            if pk_val is not None:
+                self.identity_map.remove(obj.__class__, pk_val)
+            
             object.__setattr__(obj, mapper.pk, None)
             object.__setattr__(obj, '_orm_state', ObjectState.TRANSIENT)
 
@@ -257,7 +286,6 @@ class Session:
             mapper = obj._mapper
             pk_val = getattr(obj, mapper.pk)
             self.identity_map.add(obj.__class__, pk_val, obj)
-            object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
 
         for obj in self.identity_map._map.values():
             if getattr(obj, '_orm_state', None) != ObjectState.TRANSIENT:
@@ -266,7 +294,6 @@ class Session:
         self._new.clear()
         self._dirty.clear()
         self._deleted.clear()
-        
         self.engine.logger.warning("[TRANSACTION]: Stan sesji zresetowany.")
 
 

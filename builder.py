@@ -10,18 +10,26 @@ class QueryBuilder:
         return f'"{identifier}"'
 
     def build_insert(self, mapper, data):
-        table = self._quote(mapper.table_name)
-        fields = list(data.keys())
+        table_name = mapper._get_target_table(mapper)
+        table = self._quote(table_name)
         
+        # DODATEK: Automatycznie dodajemy dyskryminator (np. type = 'Student')
+        final_data = dict(data)
+        if mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE":
+            final_data[mapper.discriminator] = mapper.discriminator_value
+
+        fields = list(final_data.keys())
         quoted_fields = [self._quote(f) for f in fields]
         placeholders = ", ".join(["?" for _ in fields])
-        values = [data[f] for f in fields]
+        values = [final_data[f] for f in fields]
         
         sql = f"INSERT INTO {table} ({', '.join(quoted_fields)}) VALUES ({placeholders})"
         return sql, tuple(values)
 
     def build_select(self, mapper, filters, limit=None, offset=None, joins=None):
-        table = self._quote(mapper.table_name)
+        table_name = mapper._get_target_table(mapper)
+        table = self._quote(table_name)
+        
         cols = [f"{table}.{self._quote(c)}" for c in mapper.columns.keys()]
         
         join_clauses = []
@@ -43,15 +51,22 @@ class QueryBuilder:
                         f'JOIN {target_table} ON {table}.{local_pk} = {target_table}.{remote_fk}'
                     )
 
+                #To do
+
         sql = f"SELECT {', '.join(cols)} FROM {table}"
+
+        params = []
+        actual_filters = dict(filters)
+        if mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE":
+             if mapper.discriminator not in actual_filters:
+                actual_filters[mapper.discriminator] = mapper.discriminator_value
         
         if join_clauses:
             sql += " " + " ".join(join_clauses)
             
-        params = []
-        if filters:
+        if actual_filters:
             where_parts = []
-            for col, val in filters.items():
+            for col, val in actual_filters.items():
                 where_parts.append(f"{table}.{self._quote(col)} = ?")
                 params.append(val)
             sql += " WHERE " + " AND ".join(where_parts)
@@ -66,8 +81,9 @@ class QueryBuilder:
         return sql, tuple(params)
     
     def build_delete(self, mapper, pk_value):
-        table = self._quote(mapper.table_name)
-        pk_col = self._quote(mapper.pk)
+        table_name = mapper._get_target_table(mapper)
+        table = self._quote(table_name)
+        pk_col = self._quote(mapper._get_target_pk(mapper))
         sql = f"DELETE FROM {table} WHERE {pk_col} = ?"
         return sql, (pk_value,)
 
@@ -80,8 +96,9 @@ class QueryBuilder:
         return sql, (local_id, remote_id)
 
     def build_update(self, mapper, data, pk_value):
-        table = self._quote(mapper.table_name)
-        pk_col = self._quote(mapper.pk)
+        table_name = mapper._get_target_table(mapper)
+        table = self._quote(table_name)
+        pk_col = self._quote(mapper._get_target_pk(mapper))
         
         fields = list(data.keys())
         set_clause = ", ".join([f"{self._quote(f)} = ?" for f in fields])

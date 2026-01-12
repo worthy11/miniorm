@@ -17,6 +17,10 @@ class Query:
     def limit(self, value: int):
         self._limit = value
         return self
+    
+    def offset(self, value: int):
+        self._offset = value
+        return self
 
     def all(self):
         if hasattr(self.session, '_autoflush'):
@@ -88,16 +92,16 @@ class Query:
 
     
     def _hydrate(self, row, column_names, base_mapper):
+        row_dict = dict(zip(column_names, row))
+        discriminator_col = base_mapper.discriminator
+        row_type_value = row_dict.get(discriminator_col)
         target_cls = self.model_class
-        if "type" in column_names:
-            try:
-                type_idx = column_names.index("type")
-                class_name = row[type_idx]
-                target_cls = next((c for c in MiniBase._registry if c.__name__ == class_name), target_cls)
-            except (ValueError, IndexError):
-                pass
+        for cls, mapper in MiniBase._registry.items():
+            if mapper.discriminator_value == row_type_value:
+                target_cls = cls
+                break
 
-        pk_val = row[column_names.index(base_mapper.pk)]
+        pk_val = row_dict[base_mapper.pk]
         existing = self.session.identity_map.get(target_cls, pk_val)
         if existing: 
             if getattr(existing, '_orm_state', None) == ObjectState.DELETED:
@@ -105,11 +109,12 @@ class Query:
             return existing
 
         obj = target_cls()
-        for i, name in enumerate(column_names):
-            if hasattr(obj, name) or name in target_cls._mapper.columns:
-                setattr(obj, name, row[i])
+        for name, value in row_dict.items():
+            if name in target_cls._mapper.columns:
+                object.__setattr__(obj, name, value)
 
-        obj._orm_state = ObjectState.PERSISTENT
-        obj._session = self.session
+        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
+        object.__setattr__(obj, '_session', self.session)
         self.session.identity_map.add(target_cls, pk_val, obj)
+        self.session._take_snapshot(obj)
         return obj
