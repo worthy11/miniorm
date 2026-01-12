@@ -13,7 +13,6 @@ class QueryBuilder:
         table_name = mapper._get_target_table(mapper)
         table = self._quote(table_name)
         
-        # DODATEK: Automatycznie dodajemy dyskryminator (np. type = 'Student')
         final_data = dict(data)
         if mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE":
             final_data[mapper.discriminator] = mapper.discriminator_value
@@ -51,12 +50,11 @@ class QueryBuilder:
                         f'JOIN {target_table} ON {table}.{local_pk} = {target_table}.{remote_fk}'
                     )
 
-                #To do
-
         sql = f"SELECT {', '.join(cols)} FROM {table}"
 
         params = []
         actual_filters = dict(filters)
+        
         if mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE":
              if mapper.discriminator not in actual_filters:
                 actual_filters[mapper.discriminator] = mapper.discriminator_value
@@ -67,8 +65,14 @@ class QueryBuilder:
         if actual_filters:
             where_parts = []
             for col, val in actual_filters.items():
-                where_parts.append(f"{table}.{self._quote(col)} = ?")
-                params.append(val)
+                quoted_col = f"{table}.{self._quote(col)}"
+                
+                if val is None:
+                    where_parts.append(f"{quoted_col} IS NULL")
+                else:
+                    where_parts.append(f"{quoted_col} = ?")
+                    params.append(val)
+                    
             sql += " WHERE " + " AND ".join(where_parts)
             
         if limit is not None:

@@ -67,25 +67,34 @@ class Session:
         if mapper is None:
             return
 
-        state = getattr(instance, '_orm_state', ObjectState.TRANSIENT)
-    
-        if state == ObjectState.DELETED:
-            if instance in self._deleted:
-                self._deleted.remove(instance)
-            object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
-            return
+        pk_val = instance.__dict__.get(mapper.pk)
+        
+        if pk_val is not None and not hasattr(pk_val, 'column_type'):
+            if not self.identity_map.get(instance.__class__, pk_val):
+                object.__setattr__(instance, '_session', self)
+                object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
+                self.identity_map.add(instance.__class__, pk_val, instance)
+                
+                self._take_snapshot(instance)
+        else:
+            state = getattr(instance, '_orm_state', ObjectState.TRANSIENT)
+        
+            if state == ObjectState.DELETED:
+                if instance in self._deleted:
+                    self._deleted.remove(instance)
+                object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
+                self._take_snapshot(instance)
+                return
 
-        if state == ObjectState.TRANSIENT:
-            object.__setattr__(instance, '_orm_state', ObjectState.PENDING)
-            object.__setattr__(instance, '_session', self)
-            self._new.add(instance)
+            if state == ObjectState.TRANSIENT:
+                object.__setattr__(instance, '_orm_state', ObjectState.PENDING)
+                object.__setattr__(instance, '_session', self)
+                self._new.add(instance)
 
         for rel_name, rel in mapper.relationships.items():
             val = instance.__dict__.get(rel_name)
-            
             if val is None:
                 continue
-
             if rel.r_type in ("many-to-one", "one-to-one"):
                 self.add(val)
             elif rel.r_type in ("one-to-many", "many-to-many") and isinstance(val, list):
@@ -179,13 +188,15 @@ class Session:
     def _perform_delete(self, obj):
         mapper = obj._mapper
         pk_val = getattr(obj, mapper.pk)
+
         sql, params = self.query_builder.build_delete(mapper, pk_val)
         self.engine.execute(sql, params)
         
         snapshot_key = (obj.__class__, pk_val)
-        self._snapshots.pop(snapshot_key, None)
         
+        self._snapshots.pop(snapshot_key, None)
         self.identity_map.remove(obj.__class__, pk_val)
+        
         object.__setattr__(obj, '_orm_state', ObjectState.DELETED)
 
 
@@ -250,11 +261,27 @@ class Session:
 
 
     def refresh(self, instance):
-        mapper = MiniBase._registry.get(instance.__class__)
+        mapper = instance._mapper
         pk_name = mapper.pk
-        pk_val = object.__getattribute__(instance, pk_name)
         
+        # SCEPTYCZNA POPRAWKA: Szukamy ID w IdentityMap, tam na pewno jest INT
+        pk_val = None
+        for (cls, id_val), inst in self.identity_map._map.items():
+            if inst is instance:
+                pk_val = id_val
+                break
+        
+        # Jeśli nie ma w mapie, to obiekt nie jest podpięty pod sesję!
+        if pk_val is None:
+            # Ostatnia deska ratunku: sprawdźmy surowy słownik instancji
+            pk_val = instance.__dict__.get(pk_name)
+
+        # Jeśli pk_val to nadal obiekt 'Number', rzućmy jasny błąd
+        if hasattr(pk_val, 'column_type'):
+            raise ValueError(f"Nie można odświeżyć obiektu {instance}, ponieważ nie posiada on tożsamości (ID).")
+
         sql, params = self.query_builder.build_select(mapper, {pk_name: pk_val}, limit=1)
+        # Teraz params będą zawierać czystą wartość, a nie obiekt Number
         rows = self.engine.execute(sql, params)
         
         if rows:

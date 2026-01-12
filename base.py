@@ -26,7 +26,6 @@ class MiniBase:
             if isinstance(dtype, Column)
         }
 
-        # Extract Meta class attributes
         meta_cls = getattr(cls, "Meta", None)
         meta_attrs = {}
         if meta_cls:
@@ -38,42 +37,29 @@ class MiniBase:
         MiniBase._registry[cls] = cls._mapper
 
     def __getattribute__(self, name):
-        # 1. Techniczne wyłączenia - tylko te pola, które nie mogą wyzwalać logiki ORM
-        # USUNĘLIŚMY name == 'id', aby ID też mogło się odświeżać
         if name.startswith('_') or name == 'mapper_args':
             return object.__getattribute__(self, name)
         
-        # 2. Pobranie stanu i sesji (używamy object.__getattribute__, by uniknąć rekurencji)
         state = object.__getattribute__(self, '_orm_state')
         session = object.__getattribute__(self, '_session')
 
-        # 3. Logika EXPIRED (Lazy Loading danych kolumn)
-        # Jeśli dane wygasły, idziemy do bazy, zanim spróbujemy je odczytać
         if state == ObjectState.EXPIRED and session:
             session.refresh(self)
 
-        # 4. Logika Relacji (Lazy Loading powiązanych obiektów)
         mapper = object.__getattribute__(self, '_mapper')
         if name in mapper.relationships:
-            # Jeśli relacja jest już w __dict__ (załadowana), zwróć ją
             if name in self.__dict__:
                 return self.__dict__[name]
 
-            # Jeśli nie ma, a mamy sesję - doładuj ją
             if session:
                 rel = mapper.relationships[name]
                 value = self._load_relationship(session, rel)
                 object.__setattr__(self, name, value)
                 return value
 
-        # 5. Finalne pobranie wartości (z __dict__ instancji)
         val = object.__getattribute__(self, name)
 
-        # 6. Sceptyczny bezpiecznik: 
-        # Jeśli po odświeżeniu wciąż dostajemy obiekt typu Column (np. Number), 
-        # to znaczy, że w bazie go nie ma lub refresh zawiódł.
         if isinstance(val, Column) and state != ObjectState.TRANSIENT:
-            # Nie chcemy zwracać definicji kolumny jako wartości danych
             return None
 
         return val
@@ -98,15 +84,21 @@ class MiniBase:
         return None
     
     def __setattr__(self, name, value):
+        mapper = getattr(self, '_mapper', None)
+        if mapper and name == mapper.pk:
+            current_id = self.__dict__.get(name)
+            state = getattr(self, '_orm_state', None)
+            if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED) and current_id is not None:
+                if current_id != value:
+                    raise AttributeError(
+                        f"Krytyczny błąd: Nie można zmienić klucza głównego '{name}' "
+                        f"dla obiektu {self.__class__.__name__} po jego zapisaniu."
+                    )
+
         object.__setattr__(self, name, value)
-        if not name.startswith('_'):
-            mapper = getattr(self, '_mapper', None)
-            if mapper and name in mapper.columns:
-                try:
-                    state = object.__getattribute__(self, '_orm_state')
-                    if state == ObjectState.EXPIRED:
-                        object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
-                except AttributeError:
-                    pass
+        
+        if not name.startswith('_') and mapper and name in mapper.columns:
+            if getattr(self, '_orm_state', None) == ObjectState.EXPIRED:
+                object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
 
         #TO DO: relacje many to many, one to one
