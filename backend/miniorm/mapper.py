@@ -1,5 +1,5 @@
-from orm_types import Relationship, ForeignKey
-from inheritance import STRATEGIES
+from .orm_types import Relationship, ForeignKey
+from .inheritance import STRATEGIES
 
 class Mapper:
     def __init__(self, cls, columns, meta_attrs):
@@ -72,7 +72,7 @@ class Mapper:
         if not self.parent:
             self.columns = dict(self.declared_columns)
             self.local_columns = dict(self.declared_columns)
-            from orm_types import Text
+            from .orm_types import Text
             self.columns[self.discriminator] = Text(nullable=False, default=self.discriminator_value)
             self.local_columns[self.discriminator] = Text(nullable=False, default=self.discriminator_value)
             return
@@ -184,7 +184,7 @@ class Mapper:
                 self._resolve_single_relationship(name, rel)
     
     def _resolve_target_class(self, target):
-        from base import MiniBase
+        from .base import MiniBase
         if isinstance(target, type):
             return target
         if isinstance(target, str):

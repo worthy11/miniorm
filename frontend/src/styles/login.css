@@ -1,0 +1,149 @@
+/* Login View Styles */
+
+.login-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--color-bg-light) 0%, #c8e8b8 50%, var(--color-bg-light) 100%);
+  padding: var(--spacing-lg);
+}
+
+.login-card {
+  background: var(--color-bg-white);
+  padding: var(--spacing-2xl);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 100%;
+  max-width: 420px;
+  border-top: 4px solid var(--color-primary);
+}
+
+.login-card h2 {
+  text-align: center;
+  color: var(--color-dark);
+  margin-bottom: var(--spacing-xl);
+  font-size: var(--font-size-2xl);
+  position: relative;
+}
+
+.login-card h2::after {
+  content: '';
+  display: block;
+  width: 60px;
+  height: 3px;
+  background: var(--color-primary);
+  margin: var(--spacing-sm) auto 0;
+  border-radius: 2px;
+}
+
+.login-card .form-group {
+  margin-bottom: var(--spacing-lg);
+}
+
+.login-card .form-group label {
+  display: block;
+  margin-bottom: var(--spacing-xs);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.login-card .form-group input {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  background: var(--color-bg-light);
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.login-card .form-group input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: var(--color-bg-white);
+  box-shadow: 0 0 0 3px rgba(102, 181, 57, 0.15);
+}
+
+.login-card .form-group input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.login-card .submit-btn {
+  width: 100%;
+  padding: 1rem;
+  background: var(--color-primary);
+  color: var(--color-text-light);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: var(--spacing-sm);
+}
+
+.login-card .submit-btn:hover {
+  background: var(--color-primary-dark);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 181, 57, 0.4);
+}
+
+.login-card .switch-btn {
+  width: 100%;
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-sm);
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: color var(--transition-fast);
+}
+
+.login-card .switch-btn:hover {
+  color: var(--color-primary-dark);
+  text-decoration: underline;
+}
+
+.login-card .admin-link {
+  display: block;
+  text-align: center;
+  margin-top: var(--spacing-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.login-card .admin-link:hover {
+  color: var(--color-gray);
+}
+
+.login-card .msg-success,
+.login-card .msg-error {
+  text-align: center;
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-md);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+.login-card .msg-success {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border-left: 4px solid var(--color-success);
+}
+
+.login-card .msg-error {
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  border-left: 4px solid var(--color-error);
+}

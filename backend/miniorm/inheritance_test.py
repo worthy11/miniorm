@@ -1,5 +1,5 @@
-from base import MiniBase
-from orm_types import Text, Number, Relationship
+from .base import MiniBase
+from .orm_types import Text, Number, Relationship
 
 class Person(MiniBase):
     class Meta:

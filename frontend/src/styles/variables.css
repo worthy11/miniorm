@@ -1,0 +1,62 @@
+/* Color Palette - Green Valley Veterinary Clinic Theme */
+:root {
+  /* Primary Colors */
+  --color-primary: #66B539;
+  --color-primary-dark: #4a9628;
+  --color-primary-light: #7ec752;
+  
+  /* Neutral Colors */
+  --color-dark: #151B1F;
+  --color-gray: #374148;
+  --color-gray-light: #5a6670;
+  
+  /* Background Colors */
+  --color-bg-light: #E8F7DD;
+  --color-bg-white: #ffffff;
+  --color-bg-card: #f8faf6;
+  
+  /* Text Colors */
+  --color-text-primary: #151B1F;
+  --color-text-secondary: #374148;
+  --color-text-light: #ffffff;
+  --color-text-muted: #6c757d;
+  
+  /* Status Colors */
+  --color-success: #66B539;
+  --color-success-bg: #d4edda;
+  --color-success-text: #155724;
+  --color-error: #dc3545;
+  --color-error-bg: #f8d7da;
+  --color-error-text: #721c24;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(21, 27, 31, 0.08);
+  --shadow-md: 0 4px 12px rgba(21, 27, 31, 0.12);
+  --shadow-lg: 0 8px 24px rgba(21, 27, 31, 0.16);
+  
+  /* Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  
+  /* Spacing */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+  
+  /* Typography */
+  --font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 2rem;
+  
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+}

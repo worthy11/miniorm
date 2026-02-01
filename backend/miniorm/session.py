@@ -1,8 +1,8 @@
-from states import ObjectState
-from identity_map import IdentityMap
-from dependency_graph import DependencyGraph
-from base import MiniBase 
-from query import Query
+from .states import ObjectState
+from .identity_map import IdentityMap
+from .dependency_graph import DependencyGraph
+from .base import MiniBase 
+from .query import Query
 
 class Session:
     def __init__(self, engine, query_builder):
@@ -132,7 +132,7 @@ class Session:
         for rel_name, rel in mapper.relationships.items():
             if rel.r_type == "many-to-one":
                 parent = getattr(obj, rel_name, None)
-                from orm_types import Relationship
+                from .orm_types import Relationship
                 if parent is None or isinstance(parent, Relationship):
                     continue
 

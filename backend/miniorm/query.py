@@ -1,5 +1,5 @@
-from base import MiniBase
-from states import ObjectState
+from .base import MiniBase
+from .states import ObjectState
 
 class Query:
     def __init__(self, model_class, session):

@@ -1,6 +1,6 @@
-from mapper import Mapper
-from orm_types import Column
-from states import ObjectState
+from .mapper import Mapper
+from .orm_types import Column
+from .states import ObjectState
 
 class MiniBase:
     _registry = {}
@@ -60,17 +60,17 @@ class MiniBase:
         return object.__getattribute__(self, name)
 
     def _load_relationship(self, session, rel):   #To do
-        from states import ObjectState
+        from .states import ObjectState
         
         if rel.r_type == "many-to-one":
             fk_val = getattr(self, rel._resolved_fk_name, None)
-            return session.get(rel.remote_model, fk_val) if fk_val else None
+            return session.get(rel._resolved_target, fk_val) if fk_val else None
 
         if rel.r_type == "one-to-many":
-            return session.query(rel.remote_model).filter(**{rel._resolved_fk_name: self.id}).all()
+            return session.query(rel._resolved_target).filter(**{rel._resolved_fk_name: self.id}).all()
 
         if rel.r_type == "many-to-many":
-            return session.query(rel.remote_model).join_m2m(
+            return session.query(rel._resolved_target).join_m2m(
                 rel.association_table, 
                 rel._resolved_local_key, 
                 rel._resolved_remote_key, 

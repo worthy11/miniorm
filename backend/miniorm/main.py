@@ -40,12 +40,12 @@
 # session.rollback()
 # print(student.name)
 
-from base import MiniBase
-from database import DatabaseEngine
-from builder import QueryBuilder
-from session import Session
-from example import Department, Employee, Project, Number, resolve_all_relationships
-from generator import SchemaGenerator
+from .base import MiniBase
+from .database import DatabaseEngine
+from .builder import QueryBuilder
+from .session import Session
+from .example import Department, Employee, Project, Number, resolve_all_relationships
+from .generator import SchemaGenerator
 import logging
 
 def test_complex_scenarios():

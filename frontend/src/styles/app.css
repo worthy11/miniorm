@@ -1,0 +1,202 @@
+/* App Layout and Landing Page Styles */
+
+/* Landing Page */
+.landing-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xl);
+  background: linear-gradient(180deg, var(--color-bg-light) 0%, var(--color-bg-white) 100%);
+  text-align: center;
+}
+
+.landing-page h1 {
+  color: var(--color-dark);
+  font-size: var(--font-size-3xl);
+  margin-bottom: var(--spacing-2xl);
+  position: relative;
+}
+
+.landing-page h1::after {
+  content: '';
+  display: block;
+  width: 80px;
+  height: 4px;
+  background: var(--color-primary);
+  margin: var(--spacing-md) auto 0;
+  border-radius: 2px;
+}
+
+.landing-page > div {
+  display: flex;
+  gap: var(--spacing-lg);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.landing-page button {
+  min-width: 140px;
+  padding: 1rem 2rem;
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-light);
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-md);
+}
+
+.landing-page button:hover {
+  background: var(--color-primary-dark);
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(102, 181, 57, 0.4);
+}
+
+.landing-page button:active {
+  transform: translateY(-1px);
+}
+
+/* Back Button (fixed, top-left) */
+.btn-back,
+button[title="Back"] {
+  position: fixed;
+  top: 24px;
+  left: 24px;
+  z-index: 50;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--color-gray);
+  border: 2px solid rgba(102, 181, 57, 0.25);
+  border-radius: 12px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(6px);
+}
+
+.btn-back:hover,
+button[title="Back"]:hover {
+  background: var(--color-primary);
+  color: var(--color-text-light);
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.btn-back:active,
+button[title="Back"]:active {
+  transform: translateY(0);
+}
+
+/* Selector Components */
+.owner-selector,
+.vet-selector {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xl);
+  background: linear-gradient(135deg, var(--color-bg-light) 0%, var(--color-bg-white) 100%);
+}
+
+.owner-selector h2,
+.vet-selector h2 {
+  color: var(--color-dark);
+  margin-bottom: var(--spacing-lg);
+  font-size: var(--font-size-2xl);
+}
+
+.owner-selector select,
+.vet-selector select {
+  min-width: 300px;
+  padding: 1rem 1.25rem;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  background: var(--color-bg-white);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2366B539' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
+  padding-right: 2.5rem;
+}
+
+.owner-selector select:focus,
+.vet-selector select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(102, 181, 57, 0.2);
+}
+
+.owner-selector select:hover,
+.vet-selector select:hover {
+  border-color: var(--color-primary-dark);
+}
+
+/* Vet Dashboard */
+.vet-dashboard {
+  min-height: 100vh;
+  padding: var(--spacing-xl);
+  background: linear-gradient(180deg, var(--color-bg-light) 0%, var(--color-bg-white) 100%);
+}
+
+.vet-dashboard > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: var(--color-bg-white);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.vet-dashboard h2 {
+  color: var(--color-dark);
+  margin-bottom: var(--spacing-md);
+}
+
+.vet-dashboard p {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-lg);
+}
+
+/* App Container */
+.app-container {
+  padding: var(--spacing-xl);
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* Form Card */
+.form-card {
+  margin-bottom: var(--spacing-xl);
+  padding: var(--spacing-xl);
+  background: var(--color-bg-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  border-top: 4px solid var(--color-primary);
+}
+
+/* Users List */
+.users-list {
+  padding: var(--spacing-lg);
+  background: var(--color-bg-light);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(102, 181, 57, 0.2);
+}
