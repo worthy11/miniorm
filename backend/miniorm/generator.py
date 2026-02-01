@@ -14,13 +14,12 @@ class SchemaGenerator:
     def create_all(self, engine, registry):
         created_tables = set()
         
-        for model_class in sorted(registry.keys(), key=lambda x: len(registry[x].columns), reverse=True):
-            mapper = registry[model_class]
+        for model_class, mapper in registry.items():
             if mapper.table_name not in created_tables:
                 sql = self.generate_create_table(mapper)
                 engine.execute(sql)
                 created_tables.add(mapper.table_name)
-                print(f"DEBUG: Stworzono tabelę kompleksową: {mapper.table_name}")
+                print(f"DEBUG: Stworzono tabelę: {mapper.table_name}")
 
         for mapper in registry.values():
             for rel in mapper.relationships.values():

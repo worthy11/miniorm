@@ -1,6 +1,8 @@
+import weakref
+
 class IdentityMap:
     def __init__(self):
-        self._map = {}
+        self._map = weakref.WeakValueDictionary()
 
     def get(self, model_class, pk):
         return self._map.get((model_class, pk))
@@ -9,7 +11,9 @@ class IdentityMap:
         self._map[(model_class, pk)] = instance
 
     def remove(self, model_class, pk):
-        self._map.pop((model_class, pk), None)
+        key = (model_class, pk)
+        if key in self._map:
+            del self._map[key]
 
     def clear(self):
         self._map.clear()

@@ -17,19 +17,10 @@ class DatabaseEngine:
         self.logger.info(msg)
 
     def execute(self, sql, params=None):
-        clean_params = []
-        if params:
-            for p in params:
-                if hasattr(p, 'column_type'):
-                    clean_params.append(getattr(p, 'value', None))
-                else:
-                    clean_params.append(p)
-
-        self._log(sql, clean_params)
+        self._log(sql, params)
         cursor = self.connection.cursor()
-        cursor.execute(sql, tuple(clean_params))
+        cursor.execute(sql, params or ())
         return cursor.fetchall()
-
 
     def execute_insert(self, sql, params=None):
         self._log(sql, params)
