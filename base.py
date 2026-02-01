@@ -65,17 +65,21 @@ class MiniBase:
         return val
 
     def _load_relationship(self, session, rel):   #To do
-        from states import ObjectState
-        
+        target_cls = rel._resolved_target
+        if not target_cls:
+            return None
+
         if rel.r_type == "many-to-one":
             fk_val = getattr(self, rel._resolved_fk_name, None)
-            return session.get(rel.remote_model, fk_val) if fk_val else None
+            return session.get(target_cls, fk_val) if fk_val else None
 
         if rel.r_type == "one-to-many":
-            return session.query(rel.remote_model).filter(**{rel._resolved_fk_name: self.id}).all()
+            fk_name = str(rel._resolved_fk_name) 
+            pk_val = getattr(self, self._mapper.pk)
+            return session.query(target_cls).filter(**{fk_name: pk_val}).all()
 
         if rel.r_type == "many-to-many":
-            return session.query(rel.remote_model).join_m2m(
+            return session.query(target_cls).join_m2m(
                 rel.association_table, 
                 rel._resolved_local_key, 
                 rel._resolved_remote_key, 

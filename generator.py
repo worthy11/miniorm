@@ -8,31 +8,45 @@ class SchemaGenerator:
 
     def _quote(self, identifier):
         if not identifier or not self._safe_ident_pattern.match(str(identifier)):
-            raise ValueError(f"Błąd bezpieczeństwa w nazwie schemy: {identifier}")
+            raise ValueError(f"Błąd bezpieczeństwa w nazwie identyfikatora SQL: {identifier}")
         return f'"{identifier}"'
     
     def create_all(self, engine, registry):
-        created_tables = set()
+        table_definitions = {}
         
-        for model_class in sorted(registry.keys(), key=lambda x: len(registry[x].columns), reverse=True):
-            mapper = registry[model_class]
-            if mapper.table_name not in created_tables:
-                sql = self.generate_create_table(mapper)
-                engine.execute(sql)
-                created_tables.add(mapper.table_name)
-                print(f"DEBUG: Stworzono tabelę kompleksową: {mapper.table_name}")
+        for mapper in registry.values():
+            name = mapper.table_name
+            if name not in table_definitions:
+                table_definitions[name] = {
+                    'columns': {},
+                    'fks': [],
+                    'pk': mapper.pk,
+                    'discriminator': mapper.discriminator
+                }
+            
+            table_definitions[name]['columns'].update(mapper.columns)
+            
+            parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
+            for col_name, col in mapper.columns.items():
+                if col_name not in parent_cols and hasattr(col, 'is_foreign_key'):
+                    table_definitions[name]['fks'].append((col_name, col))
 
+        for t_name, info in table_definitions.items():
+            sql = self._generate_sql(t_name, info)
+            engine.execute(sql)
+            print(f"DEBUG: Stworzono tabelę kompleksową: {t_name}")
+
+        created_m2m = set()
         for mapper in registry.values():
             for rel in mapper.relationships.values():
-                if rel.r_type == "many-to-many":
-                    if rel.association_table not in created_tables:
-                        sql = self.generate_m2m_table(rel)
-                        engine.execute(sql)
-                        created_tables.add(rel.association_table)
-                        print(f"DEBUG: Stworzono tabelę M2M: {rel.association_table}")
+                if rel.r_type == "many-to-many" and rel.association_table not in created_m2m:
+                    sql = self.generate_m2m_table(rel)
+                    engine.execute(sql)
+                    created_m2m.add(rel.association_table)
+                    print(f"DEBUG: Stworzono tabelę M2M: {rel.association_table}")
 
-    def generate_create_table(self, mapper):
-        table_name = self._quote(mapper.table_name)
+    def _generate_sql(self, table_name, info):
+        quoted_table = self._quote(table_name)
         column_defs = []
 
         # For CONCRETE inheritance, include ALL columns (parent + local) in each table
@@ -51,13 +65,11 @@ class SchemaGenerator:
         for name, col in columns_to_include.items():
             q_name = self._quote(name)
             sql_type = self.TYPE_MAP.get(col.dtype, "TEXT")
-            
             constraints = []
-            if name == mapper.pk:
+            if name == info['pk']:
                 constraints.append("PRIMARY KEY AUTOINCREMENT")
             if not col.nullable:
                 constraints.append("NOT NULL")
-            
             column_defs.append(f"{q_name} {sql_type} {' '.join(constraints)}".strip())
 
         # Add foreign key constraints for local columns only (not inherited ones)
@@ -73,22 +85,21 @@ class SchemaGenerator:
                     f"{self._quote(col.target_table)}({self._quote(col.target_column)})"
                 )
 
-        return f"CREATE TABLE IF NOT EXISTS {table_name} ({', '.join(column_defs)});"
-    
+        return f"CREATE TABLE IF NOT EXISTS {quoted_table} ({', '.join(column_defs)});"
 
-    def generate_m2m_table(self, rel_mapping):
-        table_name = self._quote(rel_mapping.association_table)
-        l_key = self._quote(rel_mapping._resolved_local_key)
-        r_key = self._quote(rel_mapping._resolved_remote_key)
+    def generate_m2m_table(self, rel):
+        table = self._quote(rel.association_table)
+        l_key = self._quote(rel._resolved_local_key)
+        r_key = self._quote(rel._resolved_remote_key)
         
-        local_table = self._quote(rel_mapping.local_table)
-        remote_table = self._quote(rel_mapping.remote_table)
+        target_pk = rel._resolved_target._mapper.pk
+        local_pk = rel.local_table_pk if hasattr(rel, 'local_table_pk') else "id"
 
         return f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
+        CREATE TABLE IF NOT EXISTS {table} (
             {l_key} INTEGER,
             {r_key} INTEGER,
-            FOREIGN KEY({l_key}) REFERENCES {local_table}(id),
-            FOREIGN KEY({r_key}) REFERENCES {remote_table}(id),
+            FOREIGN KEY({l_key}) REFERENCES {self._quote(rel.local_table)}({local_pk}),
+            FOREIGN KEY({r_key}) REFERENCES {self._quote(rel.remote_table)}({target_pk}),
             PRIMARY KEY ({l_key}, {r_key})
         );"""

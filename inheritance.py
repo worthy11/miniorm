@@ -6,6 +6,7 @@ class InheritanceStrategy(ABC):
     @abstractmethod
     def resolve_columns(self, mapper):
         pass
+        pass
 
     @abstractmethod
     def resolve_table_name(self, mapper):

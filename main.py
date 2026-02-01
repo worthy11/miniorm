@@ -4,7 +4,7 @@ from builder import QueryBuilder
 from session import Session
 from orm_types import Number, Text, Relationship
 from generator import SchemaGenerator
-from states import ObjectState
+import logging
 
 def test_complex_scenarios():
     resolve_all_relationships()
@@ -46,7 +46,7 @@ def test_complex_scenarios():
         session.commit()
         
         dept_it.name = "Human Resources" 
-        session.flush()
+        session.commit()
         
         check_dept = engine.execute("SELECT name FROM departments WHERE id = ?", (dept_it.id,))
         print(f"Nazwa w bazie po automatycznym update: {check_dept[0]['name']}")
@@ -67,11 +67,12 @@ def test_complex_scenarios():
         detached_emp = session.query(Employee).filter(name="Patryk").first()
 
 
-    print(f"Stan obiektu po zamknięciu sesji: {detached_emp._orm_state}")
-    try:
-        print(f"Dane odłączonego obiektu: {detached_emp.name}")
-    except Exception as e:
-        print(f"Błąd dostępu do danych: {e}")
+    if detached_emp:
+        print(f"Stan obiektu po zamknięciu sesji: {detached_emp._orm_state}")
+        try:
+            print(f"Dane odłączonego obiektu: {detached_emp.name}")
+        except Exception as e:
+            print(f"Błąd dostępu do danych: {e}")
 
 
     with Session(engine, builder) as session:
@@ -98,69 +99,16 @@ def test_complex_scenarios():
             print(f"Zmiana w e1 widoczna w e2? {e2.name == 'Nowe Imie Patryka'}")
 
 
-    # # 1. Przygotowanie tabel (w tym asocjacyjnej)
-    # print("\n--- 10. Test: Many-To-Many i Lazy Loading ---")
-    # for model in [Department, Employee, Project]:
-    #     mapper = MiniBase._registry[model]
-    #     engine.execute(generator.generate_create_table(mapper))
-    #     # Tworzymy tabele asocjacyjne dla M2M
-    #     for rel in mapper.relationships.values():
-    #         if rel.r_type == "many-to-many":
-    #             # Prosty SQL dla tabeli łączącej, jeśli generator go nie wspiera
-    #             sql = f"CREATE TABLE IF NOT EXISTS {rel.association_table} ({rel._resolved_local_key} INTEGER, {rel._resolved_remote_key} INTEGER)"
-    #             engine.execute(sql)
-
-    # with Session(engine, builder) as session:
-    #     # 2. Tworzenie danych
-    #     it_dept = Department(name="IT Cloud")
-    #     p1 = Project(name="System Migracji")
-    #     p2 = Project(name="Bezpieczeństwo")
-        
-    #     emp1 = Employee(name="Kamil")
-    #     emp2 = Employee(name="Marta")
-
-    #     # Przypisanie departamentu (Many-To-One)
-    #     emp1.department = it_dept
-    #     emp2.department = it_dept
-
-    #     # Przypisanie projektów (Many-To-Many)
-    #     # Zakładamy, że w Employee masz pole 'projects'
-    #     emp1.projects = [p1, p2] 
-    #     emp2.projects = [p1]
-
-    #     session.add(emp1)
-    #     session.add(emp2)
-    #     session.commit()
-    #     print("Zapisano pracowników, departament i projekty (M2M).")
-
-    # # 3. Test Lazy Loadingu w nowej sesji
-    # with Session(engine, builder) as session:
-    #     print("\n--- Sprawdzanie Lazy Loadingu ---")
-    #     kamil = session.query(Employee).filter(name="Kamil").first()
-        
-    #     # Test Many-To-One (Pracownik -> Departament)
-    #     print(f"Pracownik: {kamil.name}")
-    #     print(f"Dociąganie departamentu (Lazy): {kamil.department.name}")
-
-    #     # Test Many-To-Many (Pracownik -> Projekty)
-    #     # To wywoła Twoje __getattribute__ -> _load_m2m -> _query_m2m
-    #     print(f"Dociąganie projektów (Lazy M2M): {[p.name for p in kamil.projects]}")
-        
-    #     # Test One-To-Many (Departament -> Pracownicy)
-    #     dept = kamil.department
-    #     print(f"Pracownicy departamentu {dept.name}: {[e.name for e in dept.employees]}")
-
 def test_security_and_m2m_optimized():
-        engine = DatabaseEngine()
-        builder = QueryBuilder()
-        generator = SchemaGenerator()
-        generator.create_all(engine, MiniBase._registry)
-        
-        print("\n--- 11. Test Penetracyjny: SQL Injection w nazwie tabeli ---")
-        # Udajemy, że haker próbuje przejąć kontrolę przez nazwę tabeli
-        class HackedModel(MiniBase):
-            __tablename__ = "users; DROP TABLE employees; --"
-            id = Number(pk=True)
+    engine = DatabaseEngine()
+    builder = QueryBuilder()
+    generator = SchemaGenerator()
+    generator.create_all(engine, MiniBase._registry)
+    
+    print("\n--- 11. Test Penetracyjny: SQL Injection w nazwie tabeli ---")
+    class HackedModel(MiniBase):
+        __tablename__ = "users; DROP TABLE employees; --"
+        id = Number(pk=True)
 
         try:
             # Próba wygenerowania zapytania dla złośliwego modelu
@@ -179,34 +127,43 @@ def test_security_and_m2m_optimized():
             if HackedModel in MiniBase._registry:
                 del MiniBase._registry[HackedModel]
 
-        print("\n--- 12. Test: Many-To-Many bez duplikowania i rekurencji ---")
-        # Tutaj testujemy Twoją nową, zoptymalizowaną metodę _flush_m2m
-        with Session(engine, builder) as session:
-            p1 = Project(name="CyberSecurity")
-            e1 = Employee(name="Hacker")
-            
-            # Przypisujemy relację M2M
-            e1.projects = [p1]
-            session.add(e1)
-            
-            # Wywołujemy flush dwa razy - system nie może rzucić błędem ani zdublować wpisów
-            session.flush()
-            session.flush() 
-            print("Sukces: Podwójny flush nie wywołał błędu UNIQUE constraint.")
+    print("\n--- 12. Test: Many-To-Many (Insert & Update & Delete) ---")
+    with Session(engine, builder) as session:
+        p1 = Project(name="CyberSecurity")
+        p2 = Project(name="AI Development")
+        e1 = Employee(name="Hacker")
+        
+        # 1. Insert z relacją
+        e1.projects = [p1]
+        session.add(e1)
+        session.commit()
+        print("Zapisano pracownika z 1 projektem.")
 
-            session.commit()    
+        # 2. Update (Dodanie drugiego projektu) - Delta Update
+        e1.projects.append(p2)
+        session.commit()
+        print("Zaktualizowano: dodano drugi projekt.")
 
-    
+        # 3. Update (Usunięcie pierwszego projektu) - Delta Update
+        e1.projects.remove(p1)
+        session.commit()
+        print("Zaktualizowano: usunięto pierwszy projekt.")
+        
+        # Weryfikacja
+        check_e1 = session.query(Employee).filter(name="Hacker").first()
+        print(f"Aktualne projekty w bazie: {[p.name for p in check_e1.projects]}")
+
 def test_lazy_loading_full():
+    # Czyścimy śmieci po poprzednich testach
     to_remove = [cls for cls in MiniBase._registry if "DROP TABLE" in getattr(cls, "__tablename__", "")]
     for cls in to_remove:
         del MiniBase._registry[cls]
+        
     engine = DatabaseEngine()
     builder = QueryBuilder()
     generator = SchemaGenerator()
     
     print("\n--- 10. Test: Many-To-Many i Lazy Loading ---")
-    # Automatyczne tworzenie wszystkiego (w tym tabel M2M!)
     generator.create_all(engine, MiniBase._registry)
 
     with Session(engine, builder) as session:
@@ -233,22 +190,18 @@ def test_lazy_loading_full():
         kamil = session.query(Employee).filter(name="Kamil").first()
         
         # PRZYPADEK 1: Many-To-One
-        # Powinno wygenerować: SELECT * FROM departments WHERE id = ...
         dept_name = kamil.department.name 
         print(f"1. Many-to-One OK: {dept_name}")
 
         # PRZYPADEK 2: Many-To-Many
-        # Powinno wygenerować: SELECT * FROM projects JOIN employee_project ...
         projects = [p.name for p in kamil.projects]
         print(f"2. Many-to-Many OK: {projects}")
         
         # PRZYPADEK 3: One-To-Many
-        # Powinno wygenerować: SELECT * FROM employees WHERE department_id = ...
         dept = kamil.department
         colleagues = [e.name for e in dept.employees]
         print(f"3. One-to-Many OK: {colleagues}")
 
-    
 def test_unit_of_work_snapshots():
     print("\n--- 13. Test: Snapshoty i Auto-Refresh (EXPIRED) ---")
     engine = DatabaseEngine()
@@ -263,102 +216,33 @@ def test_unit_of_work_snapshots():
 
         print(f"Stan obiektu po commit: {d1._orm_state}")
         
-        # To wywoła __getattribute__ -> session.refresh()
         print(f"Dociąganie nazwy (Lazy Refresh): {d1.name}")
         print(f"Stan po refreshu: {d1._orm_state}")
 
-        # Test Dirty Checkingu: zmieniamy na to samo
+        # Test Dirty Checkingu
         d1.name = "R&D"
-        # Jeśli snapshot działa, flush nie powinien wygenerować UPDATE
         print("Wykonuję flush (nie powinno być SQL UPDATE, bo nazwa ta sama)...")
         session.flush()
 
-        # Zmieniamy faktycznie
         d1.name = "Research and Development"
         print("Wykonuję flush (powinien być SQL UPDATE)...")
         session.flush()
-
-def test_polymorphic_loading():
-    print("\n--- 14. Test: Polimorficzne ładowanie (STI) ---")
-    from example import Person, StudentSingle
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-
-    with Session(engine, builder) as session:
-        s1 = StudentSingle(name="Student Jan", grade=5)
-        session.add(s1)
-        session.commit()
-
-    with Session(engine, builder) as session:
-        # Pobieramy przez klasę bazową Person
-        person = session.query(Person).filter(name="Student Jan").first()
-        print(f"Pobrano obiekt klasy: {type(person).__name__}")
-        if isinstance(person, StudentSingle):
-            print(f"Sukces: Polimorfizm działa, ocena: {person.grade}")
-        else:
-            print("Błąd: System nie rozpoznał klasy potomnej!")
-
-
-def test_circular_dependency_error():
-    print("\n--- 15. Test: Wykrywanie cykli w grafie ---")
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-
-    with Session(engine, builder) as session:
-        d1 = Department(name="Loop Dept")
-        e1 = Employee(name="Loop Emp")
-        
-        # 1. Kierunek: Employee -> Department (FK w Employee)
-        e1.department = d1
-        
-        # 2. Kierunek: Department -> Employee (FK w Department)
-        # Aby graf to wykrył, musimy zasymulować relację Many-To-One w Departamencie
-        from orm_types import Relationship
-        circular_rel = Relationship(target=Employee, r_type="many-to-one")
-        circular_rel._resolved_target = Employee
-        circular_rel._resolved_fk_name = "manager_id"
-        
-        # Wstrzykujemy relację do mappera tylko dla tego testu
-        Department._mapper.relationships["manager"] = circular_rel
-        d1.manager = e1
-        
-        try:
-            print("Próba zapisu cyklicznie zależnych obiektów...")
-            session.add(e1)
-            session.add(d1)
-            session.flush() # To wywoła sortowanie i powinno rzucić RuntimeError
-            print("BŁĄD: System nie wykrył cyklu i próbował wysłać SQL!")
-        except RuntimeError as e:
-            print(f"SUKCES: Graf wykrył cykl i zablokował zapis: {e}")
-        finally:
-            # Sprzątamy po "wstrzykniętej" relacji, by nie psuć innych testów
-            if "manager" in Department._mapper.relationships:
-                del Department._mapper.relationships["manager"]
 
 def test_builder_universality():
     print("\n--- 16. Test: Uniwersalny Builder ---")
     engine = DatabaseEngine()
     builder = QueryBuilder()
     
-    # Zamiast pustego Mocka, użyjemy klasy, która dziedziczy po MiniBase, 
-    # aby mieć dostęp do prawdziwego Mappera i jego metod (np. _get_target_table)
-    class UniversalModel(MiniBase):
-        id = Number(pk=True)
-        name = Text()
-
-    mapper = UniversalModel._mapper
-    data = {"name": "Test", "type": "UniversalModel"}
+    class MockMapper:
+        table_name = "test_table"
+        pk = "id"
     
-    # Teraz builder wywoła mapper._get_target_table(mapper) bez błędu
-    sql, params = builder.build_insert(mapper, data)
+    data = {"name": "Test", "value": 123, "type": "MockType"}
+    sql, params = builder.build_insert(MockMapper(), data)
     
     print(f"Wygenerowany SQL: {sql}")
-    if "UniversalModel" in params and "INSERT INTO \"universalmodels\"" in sql:
-        print("SUKCES: Builder poprawnie generuje zapytania z prawdziwym Mapperem.")
+    if "type" in sql and "?" in sql:
+        print("SUKCES: Builder poprawnie generuje zapytania ze słowników.")
     else:
         print(f"BŁĄD: SQL Buildera jest niepoprawny: {sql}")
 

@@ -1,18 +1,22 @@
-from orm_types import Relationship, ForeignKey
-from inheritance import STRATEGIES
+from orm_types import Relationship, ForeignKey, Text
+from inheritance import STRATEGIES, Inheritance
 
 class Mapper:
     def __init__(self, cls, columns, meta_attrs):
         self.cls = cls
         self.meta = meta_attrs or {}
-        self.abstract = self.meta.get("abstract", False)
+        
         self.discriminator = self.meta.get("discriminator", "type")
         self.discriminator_value = self.meta.get("discriminator_value", cls.__name__)
         
         self.pk = None
         self.parent = None
         self.inheritance = None
-        self.columns = columns  # Final columns after inheritance resolution
+        
+        self.declared_columns = dict(columns)
+        self.columns = {} 
+        self.local_columns = {}
+        
         self.relationships = {}
         self.discriminator_map = None  # For SINGLE inheritance: maps discriminator values to classes
         self.children = []  # For CLASS inheritance: list of child mappers
@@ -42,8 +46,7 @@ class Mapper:
 
     def _resolve_inheritance(self):
         if not self.parent:
-            self.inheritance = None
-            return None
+            return
 
         requested = self.meta.get("inheritance")
         if requested:
@@ -52,12 +55,7 @@ class Mapper:
             requested = (self.parent.inheritance.strategy.name if self.parent.inheritance else "SINGLE")
 
         if requested not in STRATEGIES:
-            raise ValueError("Unknown inheritance strategy: %s" % requested)
-
-        if self.parent.inheritance and self.parent.inheritance.strategy.name != requested:
-            raise ValueError(
-                f"Inheritance mismatch between {self.cls.__name__} and parent {self.parent.cls.__name__}"
-            )
+            raise ValueError(f"Nieznana strategia dziedziczenia: {requested}")
 
         strategy = STRATEGIES[requested]
         discriminator_value = self.meta.get("discriminator_value", self.cls.__name__)
@@ -143,31 +141,26 @@ class Mapper:
 
     def _resolve_pk(self):
         pk_cols = [name for name, col in self.columns.items() if col.pk]
-
-        if not pk_cols and self.parent:
-            return self.parent.pk
-
-        if len(pk_cols) == 1:
+        if pk_cols:
             self.pk = pk_cols[0]
-        elif len(pk_cols) > 1:
-            self.pk = pk_cols
+        elif self.parent:
+            self.pk = self.parent.pk
         else:
-            raise Exception(f"No primary key defined for class {self.cls.__name__}")
+            raise Exception(f"Klasa {self.cls.__name__} nie ma zdefiniowanego klucza głównego.")
 
     def _resolve_relationships(self):
         for name, val in self.cls.__dict__.items():
             if isinstance(val, Relationship):
                 self.relationships[name] = val
                 self._resolve_single_relationship(name, val)
-    
+
     def _resolve_single_relationship(self, name, rel):
         target_cls = self._resolve_target_class(rel.target)
-        if target_cls is None:
-            return False
+        if not target_cls or not hasattr(target_cls, "_mapper"):
+            return
         
-        target_mapper = getattr(target_cls, "_mapper", None)
-        if target_mapper is None:
-            return False
+        target_mapper = target_cls._mapper
+        rel._resolved_target = target_cls
         
         target_table = self._get_target_table(target_mapper)
         target_pk = self._get_target_pk(target_mapper)
@@ -181,23 +174,16 @@ class Mapper:
                 fk_name = f"{target_table.rstrip('s').lower()}_id"
         
         if rel.r_type in ("many-to-one", "one-to-one"):
+            fk_name = rel.fk_name or (name if name.endswith("_id") else f"{target_table.rstrip('s')}_id")
             if fk_name not in self.columns:
-                fk_col = ForeignKey(
-                    target_table=target_table,
-                    target_column=target_pk,
-                    nullable=rel.r_type == "many-to-one"
-                )
-                
+                fk_col = ForeignKey(target_table, target_pk, nullable=(rel.r_type == "many-to-one"))
                 self.columns[fk_name] = fk_col
-            
-            rel._resolved_target = target_cls
+                self.local_columns[fk_name] = fk_col
             rel._resolved_fk_name = fk_name
-            
             if rel.backref:
                 self._setup_backref(target_mapper, rel.backref, self.cls, rel.r_type)
-            
-            return True
-        
+                target_mapper.relationships[rel.backref]._resolved_fk_name = fk_name
+
         elif rel.r_type == "one-to-many":
             source_table = self._get_target_table(self)
             source_pk = self._get_target_pk(self)
@@ -227,52 +213,33 @@ class Mapper:
             return True
         
         elif rel.r_type == "many-to-many":
-            # Many-to-many: requires junction table (not implemented in this step)
-            rel._resolved_target = target_cls
-            # TODO: Create junction table for many-to-many
-            return True
-        
-        self._resolve_deferred_relationships()
-        return False
-    
-    def _resolve_deferred_relationships(self):
-        for name, rel in list(self.relationships.items()):
-            if not hasattr(rel, '_resolved_target') or rel._resolved_target is None:
-                self._resolve_single_relationship(name, rel)
-    
+            source_table = self.table_name
+            target_table_real = target_table
+            rel.association_table = f"{source_table}_{target_table_real}"
+            rel.local_table = source_table
+            rel.remote_table = target_table_real
+            rel._resolved_local_key = f"{source_table.rstrip('s')}_id"
+            rel._resolved_remote_key = f"{target_table_real.rstrip('s')}_id"
+
+    def _register_in_discriminator_map(self):
+        root = self
+        while root.parent:
+            root = root.parent
+        root.discriminator_map[self.discriminator_value] = self.cls
+
     def _resolve_target_class(self, target):
         from base import MiniBase
-        if isinstance(target, type):
-            return target
+        if isinstance(target, type): return target
         if isinstance(target, str):
-            for cls, mapper in MiniBase._registry.items():
-                if cls.__name__ == target:
-                    return cls
+            for cls in MiniBase._registry:
+                if cls.__name__ == target: return cls
         return None
-    
-    def _get_target_table(self, target_mapper):
-        if target_mapper.inheritance:
-            return target_mapper.inheritance.strategy.resolve_table_name(target_mapper)
-        return target_mapper.table_name
-    
-    def _get_target_pk(self, target_mapper):
-        """Get the primary key column name from target mapper."""
-        if isinstance(target_mapper.pk, str):
-            return target_mapper.pk
-        elif isinstance(target_mapper.pk, list):
-            return target_mapper.pk[0]
-        else:
-            return "id"
-    
+
     def _setup_backref(self, target_mapper, backref_name, source_cls, r_type):
-        if backref_name in target_mapper.relationships:
-            return
-        
-        reverse_rel = Relationship(
-            target=source_cls,
-            backref=None,
-            r_type="one-to-many" if r_type == "many-to-one" else "many-to-one"
-        )
+        if backref_name in target_mapper.relationships: return
+        rev_type = "one-to-many" if r_type == "many-to-one" else "many-to-one"
+        from orm_types import Relationship
+        reverse_rel = Relationship(source_cls, r_type=rev_type)
         reverse_rel._resolved_target = source_cls
         target_mapper.relationships[backref_name] = reverse_rel
     
