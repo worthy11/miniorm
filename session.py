@@ -17,6 +17,40 @@ class Session:
     def query(self, model_class):
         return Query(model_class, self)
     
+    def _make_persistent(self, obj):
+        """
+        Make an object persistent - set state, add to identity map, take snapshot.
+        Called after hydrating objects from database queries.
+        
+        Args:
+            obj: Object instance to make persistent
+            
+        Returns:
+            Object instance (existing from identity map or the new one)
+        """
+        mapper = getattr(obj, '_mapper', None)
+        if mapper is None:
+            return None
+        
+        pk_val = getattr(obj, mapper.pk, None)
+        if pk_val is None:
+            return None
+        
+        # Check identity map for existing instance
+        existing = self.identity_map.get(obj.__class__, pk_val)
+        if existing:
+            return existing
+        
+        # Set ORM state and session reference
+        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
+        object.__setattr__(obj, '_session', self)
+        
+        # Add to identity map and take snapshot
+        self.identity_map.add(obj.__class__, pk_val, obj)
+        self._take_snapshot(obj)
+        
+        return obj
+    
     def get(self, model_class, pk):
         existing = self.identity_map.get(model_class, pk)
         if existing:
@@ -25,6 +59,41 @@ class Session:
             return existing
         mapper = MiniBase._registry.get(model_class)
         return self.query(model_class).filter(**{mapper.pk: pk}).first()
+    
+    def _make_persistent(self, obj):
+        """
+        Make an object persistent - set state, add to identity map, take snapshot.
+        Called after hydrating objects from database queries.
+        
+        Args:
+            obj: Object instance to make persistent
+            
+        Returns:
+            Object instance (existing from identity map or the new one)
+        """
+        mapper = getattr(obj, '_mapper', None)
+        if mapper is None:
+            return None
+        
+        pk_val = getattr(obj, mapper.pk, None)
+        if pk_val is None:
+            return None
+        
+        # Check identity map for existing instance
+        # If object already exists, return it (identity map ensures single instance per PK)
+        existing = self.identity_map.get(obj.__class__, pk_val)
+        if existing:
+            return existing
+        
+        # Set ORM state and session reference
+        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
+        object.__setattr__(obj, '_session', self)
+        
+        # Add to identity map and take snapshot
+        self.identity_map.add(obj.__class__, pk_val, obj)
+        self._take_snapshot(obj)
+        
+        return obj
     
     def _take_snapshot(self, instance):
         mapper = instance._mapper
@@ -204,7 +273,13 @@ class Session:
         data = {}
         is_single = mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE"
         
-        fields = mapper.columns.keys() if is_single else mapper.local_columns.keys()
+        # For SINGLE inheritance, use all columns. For others, use only local columns (not inherited)
+        if is_single:
+            fields = mapper.columns.keys()
+        else:
+            # Get local columns (columns not in parent)
+            parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
+            fields = [col for col in mapper.columns.keys() if col not in parent_cols]
         
         for f in fields:
             if f == mapper.pk:

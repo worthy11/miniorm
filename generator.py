@@ -47,7 +47,11 @@ class SchemaGenerator:
             
             column_defs.append(f"{q_name} {sql_type} {' '.join(constraints)}".strip())
 
-        for name, col in mapper.local_columns.items():
+        # Get local columns (columns not in parent) for table generation
+        parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
+        for name, col in mapper.columns.items():
+            if name in parent_cols:
+                continue  # Skip inherited columns
             if hasattr(col, 'is_foreign_key') and col.is_foreign_key:
                 column_defs.append(
                     f"FOREIGN KEY({self._quote(name)}) REFERENCES "

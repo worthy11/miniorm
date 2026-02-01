@@ -1,29 +1,29 @@
 from abc import ABC, abstractmethod
+from base import MiniBase
 
 
 class InheritanceStrategy(ABC):
     name: str
+    discriminator = None  # Column object representing discriminator column
 
     @abstractmethod
-    def apply_columns(self, mapper, parent_mapper):
-        """Configure mapper columns/table according to inheritance type."""
+    def resolve_columns(self, mapper):
 
     @abstractmethod
-    def target_table(self, mapper):
-        """Return table name to use for relations/foreign keys."""
+    def resolve_table_name(self, mapper):
+        pass
 
 
 class SingleTableInheritance(InheritanceStrategy):
     name = "SINGLE"
 
-    def apply_columns(self, mapper, parent_mapper):
-        mapper.table_name = parent_mapper.table_name
-        mapper.local_columns = dict(mapper.declared_columns)
-        mapper.columns = dict(parent_mapper.columns) | mapper.declared_columns
+    def resolve_columns(self, mapper):
+        mapper.table_name = mapper.parent.table_name
+        mapper.columns = dict(mapper.parent.columns) | mapper.columns
 
-    def target_table(self, mapper):
+    def resolve_table_name(self, mapper):
         root = mapper
-        while root.parent and getattr(root, "inheritance", None) and root.inheritance.name == "SINGLE":
+        while root.parent and getattr(root, "inheritance", None) and root.inheritance.strategy.name == "SINGLE":
             root = root.parent
         return root.table_name
 
@@ -31,11 +31,11 @@ class SingleTableInheritance(InheritanceStrategy):
 class ClassTableInheritance(InheritanceStrategy):
     name = "CLASS"
 
-    def apply_columns(self, mapper, parent_mapper):
-        mapper.local_columns = dict(mapper.declared_columns)
-        mapper.columns = dict(parent_mapper.columns) | mapper.declared_columns
+    def resolve_columns(self, mapper):
+        # mapper.columns already contains declared columns, merge with parent columns
+        mapper.columns = dict(mapper.parent.columns) | mapper.columns
 
-    def target_table(self, mapper):
+    def resolve_table_name(self, mapper):
         root = mapper
         while root.parent:
             root = root.parent
@@ -45,11 +45,11 @@ class ClassTableInheritance(InheritanceStrategy):
 class ConcreteTableInheritance(InheritanceStrategy):
     name = "CONCRETE"
 
-    def apply_columns(self, mapper, parent_mapper):
-        mapper.local_columns = dict(parent_mapper.columns) | mapper.declared_columns
-        mapper.columns = dict(mapper.local_columns)
+    def resolve_columns(self, mapper):
+        # mapper.columns already contains declared columns, merge with parent columns
+        mapper.columns = dict(mapper.parent.columns) | mapper.columns
 
-    def target_table(self, mapper):
+    def resolve_table_name(self, mapper):
         return mapper.table_name
 
 
@@ -58,3 +58,17 @@ STRATEGIES = {
     "CLASS": ClassTableInheritance(),
     "CONCRETE": ConcreteTableInheritance(),
 }
+
+
+class Inheritance:
+    """
+    Wraps inheritance strategy and discriminator value.
+    """
+    def __init__(self, strategy, discriminator_value):
+        self.strategy = strategy
+        self.discriminator_value = discriminator_value
+    
+    @property
+    def name(self):
+        """Delegate to strategy name for backward compatibility."""
+        return self.strategy.name

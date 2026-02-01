@@ -19,10 +19,10 @@ class Mapper:
         self.pk = None
         self.parent = None
         self.inheritance = None
-        self.declared_columns = columns
-        self.columns = {}
-        self.local_columns = {}
+        self.columns = columns  # Final columns after inheritance resolution
         self.relationships = {}
+        self.discriminator_map = None  # For SINGLE inheritance: maps discriminator values to classes
+        self.children = []  # For CLASS inheritance: list of child mappers
 
         self.resolve_parent()
         self.resolve_inheritance()
@@ -33,7 +33,7 @@ class Mapper:
     def __repr__(self):
         cols = ", ".join(self.columns.keys())
         pk = self.pk if self.pk else "None"
-        inherit = self.inheritance.name if self.inheritance else "None"
+        inherit = self.inheritance.strategy.name if self.inheritance else "None"
         parent = self.parent.cls.__name__ if self.parent else "None"
         return (
             f"<Mapper class={self.cls.__name__} table={self.table_name} "
@@ -55,34 +55,53 @@ class Mapper:
         if requested:
             requested = requested.upper()
         else:
-            requested = (self.parent.inheritance.name if self.parent.inheritance else "SINGLE")
+            requested = (self.parent.inheritance.strategy.name if self.parent.inheritance else "SINGLE")
 
         if requested not in STRATEGIES:
             raise ValueError("Unknown inheritance strategy: %s" % requested)
 
-        if self.parent.inheritance and self.parent.inheritance.name != requested:
+        if self.parent.inheritance and self.parent.inheritance.strategy.name != requested:
             raise ValueError(
                 f"Inheritance mismatch between {self.cls.__name__} and parent {self.parent.cls.__name__}"
             )
 
-        self.inheritance = STRATEGIES[requested]
-        return self.inheritance
+        strategy = STRATEGIES[requested]
+        discriminator_value = self.meta.get("discriminator_value", self.cls.__name__)
+        
+        from inheritance import Inheritance
+        self.inheritance = Inheritance(strategy, discriminator_value)
+        
 
     def resolve_columns(self):
-        if not self.parent:
-            self.columns = dict(self.declared_columns)
-            self.local_columns = dict(self.declared_columns)
-            from orm_types import Text
-            self.columns[self.discriminator] = Text(nullable=False, default=self.discriminator_value)
-            self.local_columns[self.discriminator] = Text(nullable=False, default=self.discriminator_value)
-            return
-
         if self.inheritance:
-            self.inheritance.apply_columns(self, self.parent)
-        else:
-            parent_cols = dict(self.parent.columns)
-            self.local_columns = dict(self.declared_columns)
-            self.columns = parent_cols | self.declared_columns
+            self.inheritance.strategy.resolve_columns(self)
+            # Set discriminator column reference in strategy (from parent or root)
+            if self.inheritance.strategy.discriminator is None:
+                # Find root mapper to get discriminator column
+                root = self
+                while root.parent:
+                    root = root.parent
+                if root.discriminator in root.columns:
+                    self.inheritance.strategy.discriminator = root.columns[root.discriminator]
+            
+            # add class to discriminator_map
+            if self.inheritance.strategy.name == "SINGLE":
+                root = self
+                while root.parent:
+                    root = root.parent
+
+                # create discriminator map at root
+                if root.discriminator_map is None:
+                    root.discriminator_map = {}
+                root.discriminator_map[self.inheritance.discriminator_value] = self.cls
+            
+            # add mapper to parent's children
+            if self.inheritance and self.inheritance.strategy.name == "CLASS":
+                root = self
+                while root.parent:
+                    root = root.parent
+                if self not in root.children:
+                    root.children.append(self)
 
     def resolve_pk(self):
         pk_cols = [name for name, col in self.columns.items() if col.pk]
@@ -130,7 +149,6 @@ class Mapper:
                     nullable=rel.r_type == "many-to-one"
                 )
                 
-                self.local_columns[fk_name] = fk_col
                 self.columns[fk_name] = fk_col
             
             rel._resolved_target = target_cls
@@ -155,7 +173,6 @@ class Mapper:
                     target_column=source_pk,
                     nullable=True
                 )
-                target_mapper.local_columns[target_fk_name] = fk_col
                 target_mapper.columns[target_fk_name] = fk_col
             
             rel._resolved_target = target_cls
@@ -195,7 +212,7 @@ class Mapper:
     
     def _get_target_table(self, target_mapper):
         if target_mapper.inheritance:
-            return target_mapper.inheritance.target_table(target_mapper)
+            return target_mapper.inheritance.strategy.resolve_table_name(target_mapper)
         return target_mapper.table_name
     
     def _get_target_pk(self, target_mapper):
@@ -218,3 +235,55 @@ class Mapper:
         )
         reverse_rel._resolved_target = source_cls
         target_mapper.relationships[backref_name] = reverse_rel
+    
+    def hydrate(self, row_dict, base_class=None):
+        """
+        Create an object instance from a dictionary of row data.
+        Only creates and populates the object - does not manage state.
+        
+        Args:
+            row_dict: Dictionary mapping column names to values
+            base_class: Optional base class to start from (for inheritance resolution)
+            
+        Returns:
+            Object instance with populated attributes
+        """
+        from base import MiniBase
+        
+        # Determine target class based on discriminator (for inheritance)
+        target_cls = base_class or self.cls
+        if self.inheritance and self.inheritance.strategy.name == "SINGLE":
+            # Find root mapper to get discriminator_map
+            root = self
+            while root.parent:
+                root = root.parent
+            disc_col_name = root.discriminator  # Use discriminator name from root
+            
+            if disc_col_name and disc_col_name in row_dict and root.discriminator_map:
+                row_type_value = row_dict.get(disc_col_name)
+                # Use discriminator_map from root mapper to find class
+                if row_type_value in root.discriminator_map:
+                    target_cls = root.discriminator_map[row_type_value]
+        
+        # Create new instance
+        obj = target_cls()
+        target_mapper = target_cls._mapper
+        
+        # Set column values
+        # For CLASS inheritance, columns from subclass tables are aliased as {table}_{column}
+        for name, value in row_dict.items():
+            if name in target_mapper.columns:
+                object.__setattr__(obj, name, value)
+            elif target_mapper.inheritance and target_mapper.inheritance.strategy.name == "CLASS":
+                # Check if this is an aliased column from a subclass table
+                # Format: {table_name}_{column_name}
+                # Get local columns (columns not in parent) for CLASS inheritance
+                parent_cols = set(target_mapper.parent.columns.keys()) if target_mapper.parent else set()
+                local_cols = [col_name for col_name in target_mapper.columns.keys() if col_name not in parent_cols]
+                for col_name in local_cols:
+                    alias = f"{target_mapper.table_name}_{col_name}"
+                    if name == alias:
+                        object.__setattr__(obj, col_name, value)
+                        break
+        
+        return obj

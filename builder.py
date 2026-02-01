@@ -31,6 +31,44 @@ class QueryBuilder:
         
         cols = [f"{table}.{self._quote(c)}" for c in mapper.columns.keys()]
         
+        # Handle CLASS inheritance polymorphic loading
+        class_inheritance_joins = []
+        subclass_fk_mapping = {}  # Map subclass table to FK column name
+        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS" and not mapper.parent:
+            # Querying base class with CLASS inheritance - add LEFT JOINs to all subclasses
+            for subclass_mapper in mapper.children:
+                subclass_table = self._quote(subclass_mapper.table_name)
+                # Find the FK column that references the parent
+                fk_col = None
+                from orm_types import ForeignKey
+                # Get local columns (columns not in parent) for CLASS inheritance
+                parent_cols = set(subclass_mapper.parent.columns.keys()) if subclass_mapper.parent else set()
+                for col_name, col in subclass_mapper.columns.items():
+                    if col_name in parent_cols:
+                        continue  # Skip inherited columns
+                    if isinstance(col, ForeignKey) and col.target_table == table_name:
+                        fk_col = col_name
+                        break
+                # If no FK found, assume standard naming: {parent_table}_id
+                if fk_col is None:
+                    fk_col = f"{table_name.rstrip('s')}_id"
+                
+                subclass_fk_mapping[subclass_mapper.table_name] = fk_col
+                local_pk = self._quote(mapper.pk)
+                remote_fk = self._quote(fk_col)
+                class_inheritance_joins.append(
+                    f'LEFT JOIN {subclass_table} ON {table}.{local_pk} = {subclass_table}.{remote_fk}'
+                )
+                # Add subclass columns to SELECT (with table prefix to avoid conflicts)
+                # Include FK column so we can detect which subclass this is
+                # Get local columns (columns not in parent) for CLASS inheritance
+                parent_cols = set(subclass_mapper.parent.columns.keys()) if subclass_mapper.parent else set()
+                for col_name in subclass_mapper.columns.keys():
+                    if col_name in parent_cols:
+                        continue  # Skip inherited columns
+                    alias = f"{subclass_mapper.table_name}_{col_name}"
+                    cols.append(f"{subclass_table}.{self._quote(col_name)} AS {self._quote(alias)}")
+        
         join_clauses = []
         if joins:
             for rel in joins:
@@ -51,6 +89,10 @@ class QueryBuilder:
                     )
 
         sql = f"SELECT {', '.join(cols)} FROM {table}"
+        
+        # Add CLASS inheritance joins first, then relationship joins
+        if class_inheritance_joins:
+            sql += " " + " ".join(class_inheritance_joins)
 
         params = []
         actual_filters = dict(filters)
