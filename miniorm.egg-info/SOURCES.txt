@@ -1,0 +1,5 @@
+setup.py
+miniorm.egg-info/PKG-INFO
+miniorm.egg-info/SOURCES.txt
+miniorm.egg-info/dependency_links.txt
+miniorm.egg-info/top_level.txt

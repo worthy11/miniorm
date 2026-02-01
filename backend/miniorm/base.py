@@ -10,9 +10,6 @@ class MiniBase:
         return f"<{self.__class__.__name__}(id={pk_val})>"
 
     def __init__(self, **kwargs):
-        from states import ObjectState
-        object.__setattr__(self, '_orm_state', ObjectState.TRANSIENT)
-        object.__setattr__(self, '_session', None)
         self.type = self.__class__.__name__
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -26,6 +23,7 @@ class MiniBase:
             if isinstance(dtype, Column)
         }
 
+        # Extract Meta class attributes
         meta_cls = getattr(cls, "Meta", None)
         meta_attrs = {}
         if meta_cls:
@@ -37,32 +35,29 @@ class MiniBase:
         MiniBase._registry[cls] = cls._mapper
 
     def __getattribute__(self, name):
-        if name.startswith('_') or name == 'mapper_args':
+        if name.startswith('_') or name == 'id' or name == 'mapper_args':
             return object.__getattribute__(self, name)
         
         state = object.__getattribute__(self, '_orm_state')
-        session = object.__getattribute__(self, '_session')
-
-        if state == ObjectState.EXPIRED and session:
-            session.refresh(self)
+        if state == ObjectState.EXPIRED:
+            session = object.__getattribute__(self, '_session')
+            if session:
+                session.refresh(self)
 
         mapper = object.__getattribute__(self, '_mapper')
+        
         if name in mapper.relationships:
             if name in self.__dict__:
                 return self.__dict__[name]
 
+            session = object.__getattribute__(self, '_session')
             if session:
                 rel = mapper.relationships[name]
                 value = self._load_relationship(session, rel)
                 object.__setattr__(self, name, value)
                 return value
 
-        val = object.__getattribute__(self, name)
-
-        if isinstance(val, Column) and state != ObjectState.TRANSIENT:
-            return None
-
-        return val
+        return object.__getattribute__(self, name)
 
     def _load_relationship(self, session, rel):   #To do
         from states import ObjectState
@@ -84,22 +79,12 @@ class MiniBase:
         return None
     
     def __setattr__(self, name, value):
-        mapper = getattr(self, '_mapper', None)
-        if mapper and name == mapper.pk:
-            current_id = self.__dict__.get(name)
-            state = getattr(self, '_orm_state', None)
-            
-            if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED) and current_id is not None:
-                if current_id != value:
-                    raise AttributeError(
-                        f"Krytyczny błąd: Nie można zmienić klucza głównego '{name}' "
-                        f"dla obiektu {self.__class__.__name__} po jego zapisaniu."
-                    )
-
         object.__setattr__(self, name, value)
-
-        if not name.startswith('_') and mapper and name in mapper.columns:
-            if getattr(self, '_orm_state', None) == ObjectState.EXPIRED:
-                object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
+        if not name.startswith('_'):
+            mapper = getattr(self, '_mapper', None)
+            if mapper and name in mapper.columns:
+                state = getattr(self, '_orm_state', None)
+                if state == ObjectState.EXPIRED:
+                    object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
 
         #TO DO: relacje many to many, one to one
