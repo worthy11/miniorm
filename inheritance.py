@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from base import MiniBase
+
 
 
 class InheritanceStrategy(ABC):
@@ -8,6 +8,7 @@ class InheritanceStrategy(ABC):
 
     @abstractmethod
     def resolve_columns(self, mapper):
+        pass
 
     @abstractmethod
     def resolve_table_name(self, mapper):

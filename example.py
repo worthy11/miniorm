@@ -48,6 +48,7 @@ class Employee(MiniBase):
     id = Number(pk=True)
     name = Text()
     department = Relationship(Department, backref="employees", r_type="many-to-one")
+    projects = Relationship("Project", backref="employees", r_type="many-to-many")
 
 
 class Project(MiniBase):
