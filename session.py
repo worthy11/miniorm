@@ -17,40 +17,6 @@ class Session:
     def query(self, model_class):
         return Query(model_class, self)
     
-    def _make_persistent(self, obj):
-        """
-        Make an object persistent - set state, add to identity map, take snapshot.
-        Called after hydrating objects from database queries.
-        
-        Args:
-            obj: Object instance to make persistent
-            
-        Returns:
-            Object instance (existing from identity map or the new one)
-        """
-        mapper = getattr(obj, '_mapper', None)
-        if mapper is None:
-            return None
-        
-        pk_val = getattr(obj, mapper.pk, None)
-        if pk_val is None:
-            return None
-        
-        # Check identity map for existing instance
-        existing = self.identity_map.get(obj.__class__, pk_val)
-        if existing:
-            return existing
-        
-        # Set ORM state and session reference
-        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
-        object.__setattr__(obj, '_session', self)
-        
-        # Add to identity map and take snapshot
-        self.identity_map.add(obj.__class__, pk_val, obj)
-        self._take_snapshot(obj)
-        
-        return obj
-    
     def get(self, model_class, pk):
         existing = self.identity_map.get(model_class, pk)
         if existing:
@@ -60,69 +26,23 @@ class Session:
         mapper = MiniBase._registry.get(model_class)
         return self.query(model_class).filter(**{mapper.pk: pk}).first()
     
-    def _make_persistent(self, obj):
-        """
-        Make an object persistent - set state, add to identity map, take snapshot.
-        Called after hydrating objects from database queries.
-        
-        Args:
-            obj: Object instance to make persistent
-            
-        Returns:
-            Object instance (existing from identity map or the new one)
-        """
-        mapper = getattr(obj, '_mapper', None)
-        if mapper is None:
-            return None
-        
-        pk_val = getattr(obj, mapper.pk, None)
-        if pk_val is None:
-            return None
-        
-        # Check identity map for existing instance
-        # If object already exists, return it (identity map ensures single instance per PK)
-        existing = self.identity_map.get(obj.__class__, pk_val)
-        if existing:
-            return existing
-        
-        # Set ORM state and session reference
-        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
-        object.__setattr__(obj, '_session', self)
-        
-        # Add to identity map and take snapshot
-        self.identity_map.add(obj.__class__, pk_val, obj)
-        self._take_snapshot(obj)
-        
-        return obj
-    
     def _take_snapshot(self, instance):
         mapper = instance._mapper
-        pk_val = getattr(instance, mapper.pk, None)
-        if pk_val is not None:
-            key = (instance.__class__, pk_val)
-            state = {
-                name: instance.__dict__.get(name) 
-                for name in mapper.columns 
-                if name in instance.__dict__
-            }
-            self._snapshots[key] = state
+        state = {name: getattr(instance, name) for name in mapper.columns if hasattr(instance, name)}
+        self._snapshots[id(instance)] = state
 
 
     def _get_dirty_objects(self):
         dirty = []
-        print(f"DEBUG: Sprawdzam IdentityMap, rozmiar: {len(self.identity_map._map)}")
-        
-        for key, obj in self.identity_map._map.items():
-            old_state = self._snapshots.get(key)
-            
-            if not old_state:
-                print(f"DEBUG: Brak snapshota dla obiektu {obj}")
+        for obj in self.identity_map._map.values():
+            if getattr(obj, '_orm_state', None) != ObjectState.PERSISTENT:
                 continue
             
-            for attr, old_val in old_state.items():
-                current_val = obj.__dict__.get(attr)
-                if current_val != old_val:
-                    print(f"DEBUG: Zmiana wykryta w {obj}: {attr} '{old_val}' -> '{current_val}'")
+            old_state = self._snapshots.get(id(obj))
+            if old_state is None: continue
+            
+            for key, old_val in old_state.items():
+                if getattr(obj, key) != old_val:
                     dirty.append(obj)
                     break
         return dirty
@@ -136,34 +56,25 @@ class Session:
         if mapper is None:
             return
 
-        pk_val = instance.__dict__.get(mapper.pk)
-        
-        if pk_val is not None :
-            if not self.identity_map.get(instance.__class__, pk_val):
-                object.__setattr__(instance, '_session', self)
-                object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
-                self.identity_map.add(instance.__class__, pk_val, instance)
-                
-                self._take_snapshot(instance)
-        else:
-            state = getattr(instance, '_orm_state', ObjectState.TRANSIENT)
-        
-            if state == ObjectState.DELETED:
-                if instance in self._deleted:
-                    self._deleted.remove(instance)
-                object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
-                self._take_snapshot(instance)
-                return
+        state = getattr(instance, '_orm_state', ObjectState.TRANSIENT)
+    
+        if state == ObjectState.DELETED:
+            if instance in self._deleted:
+                self._deleted.remove(instance)
+            object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
+            return
 
-            if state == ObjectState.TRANSIENT:
-                object.__setattr__(instance, '_orm_state', ObjectState.PENDING)
-                object.__setattr__(instance, '_session', self)
-                self._new.add(instance)
+        if state == ObjectState.TRANSIENT:
+            object.__setattr__(instance, '_orm_state', ObjectState.PENDING)
+            object.__setattr__(instance, '_session', self)
+            self._new.add(instance)
 
         for rel_name, rel in mapper.relationships.items():
             val = instance.__dict__.get(rel_name)
+            
             if val is None:
                 continue
+
             if rel.r_type in ("many-to-one", "one-to-one"):
                 self.add(val)
             elif rel.r_type in ("one-to-many", "many-to-many") and isinstance(val, list):
@@ -176,13 +87,10 @@ class Session:
             self._deleted.add(instance)
 
     def flush(self):
-        actual_dirty = self._get_dirty_objects()
-        self._dirty.update(actual_dirty)
         if not (self._new or self._dirty or self._deleted):
             return
 
         actual_dirty = self._get_dirty_objects()
-        print(f"DEBUG: Dirty objects found: {actual_dirty}")
         self._dirty.update(actual_dirty)
         
         to_insert = list(self._new)
@@ -195,6 +103,15 @@ class Session:
                 save_plan = save_graph.sort()
 
                 for obj in save_plan:
+                    # Skip parent objects created by DependencyGraph - they're not in _new
+                    # They'll be handled when we process their children
+                    if obj not in self._new and obj not in self._dirty:
+                        # This is a parent object created for CLASS inheritance
+                        # Check if it needs to be inserted
+                        if getattr(obj, '_orm_state', None) == ObjectState.PENDING:
+                            self._new.add(obj)
+                            object.__setattr__(obj, '_session', self)
+                    
                     self._sync_foreign_keys(obj)
                     if obj in self._new:
                         self._perform_insert(obj)
@@ -217,7 +134,9 @@ class Session:
                 
         except Exception as e:
             self.rollback()
-            raise RuntimeError(f"Krytyczny błąd synchronizacji Unit of Work: {e}")
+            import traceback
+            error_details = f"{type(e).__name__}: {str(e)}"
+            raise RuntimeError(f"Krytyczny błąd synchronizacji Unit of Work: {error_details}") from e
         
     def _sync_foreign_keys(self, obj):
         mapper = obj._mapper
@@ -237,14 +156,37 @@ class Session:
         
     def _perform_insert(self, obj):
         mapper = MiniBase._registry.get(obj.__class__)
-        data = self._prepare_data(obj, mapper)
-        sql, params = self.query_builder.build_insert(mapper, data)
-        new_id = self.engine.execute_insert(sql, params)
-        object.__setattr__(obj, mapper.pk, new_id)
-        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
-        self.identity_map.add(obj.__class__, new_id, obj)
-        print(f"DEBUG: Dodano do IM: {obj.__class__} id={new_id}")
-        self._new.remove(obj)
+        
+        # Check if this is a parent object created for CLASS inheritance
+        # We check if it has the _class_inheritance_children attribute set by DependencyGraph
+        is_class_parent = hasattr(obj, '_class_inheritance_children')
+        
+        try:
+            data = self._prepare_data(obj, mapper)
+            sql, params = self.query_builder.build_insert(mapper, data)
+            new_id = self.engine.execute_insert(sql, params)
+            object.__setattr__(obj, mapper.pk, new_id)
+            object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
+            self.identity_map.add(obj.__class__, new_id, obj)
+            # Remove from _new if it was there (might have been added by DependencyGraph)
+            if obj in self._new:
+                self._new.remove(obj)
+            
+            # If this is a CLASS inheritance parent, update children's FK fields
+            if is_class_parent:
+                children = getattr(obj, '_class_inheritance_children', [])
+                for child_obj in children:
+                    child_mapper = child_obj._mapper
+                    # Find the relationship that points to the parent
+                    for rel_name, rel in child_mapper.relationships.items():
+                        target_cls = child_mapper._resolve_target_class(rel.target)
+                        if target_cls == mapper.cls and rel.r_type in ("many-to-one", "one-to-one"):
+                            if hasattr(rel, '_resolved_fk_name'):
+                                object.__setattr__(child_obj, rel._resolved_fk_name, new_id)
+                            break
+        except Exception as e:
+            # Re-raise with more context about which object failed
+            raise RuntimeError(f"Błąd podczas wstawiania {obj}: {e}") from e
 
     def _perform_update(self, obj):
         mapper = MiniBase._registry.get(obj.__class__)
@@ -255,37 +197,27 @@ class Session:
         self._dirty.remove(obj)
 
     def _perform_delete(self, obj):
-        mapper = obj._mapper
+        mapper = MiniBase._registry.get(obj.__class__)
         pk_val = getattr(obj, mapper.pk)
-
         sql, params = self.query_builder.build_delete(mapper, pk_val)
         self.engine.execute(sql, params)
-        
-        snapshot_key = (obj.__class__, pk_val)
-        
-        self._snapshots.pop(snapshot_key, None)
         self.identity_map.remove(obj.__class__, pk_val)
-        
-        object.__setattr__(obj, '_orm_state', ObjectState.DELETED)
+        self._deleted.remove(obj)
 
 
     def _prepare_data(self, obj, mapper):
         data = {}
-        is_single = mapper.inheritance and getattr(mapper.inheritance, 'name', None) == "SINGLE"
-        
-        # For SINGLE inheritance, use all columns. For others, use only local columns (not inherited)
-        if is_single:
+        # For SINGLE inheritance, use all columns. For CLASS/CONCRETE, use only local columns
+        if mapper.inheritance and mapper.inheritance.strategy.name == "SINGLE":
             fields = mapper.columns.keys()
         else:
-            # Get local columns (columns not in parent)
-            parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
-            fields = [col for col in mapper.columns.keys() if col not in parent_cols]
+            fields = mapper.local_columns.keys()
         
         for f in fields:
             if f == mapper.pk:
                 continue
-            if f == mapper.discriminator:
-                data[f] = mapper.discriminator_value
+            if f == "type":
+                data[f] = obj.__class__.__name__
             else:
                 data[f] = getattr(obj, f, None)
         return data
@@ -326,7 +258,6 @@ class Session:
             self.flush()
             self.engine.commit()
             for obj in self.identity_map._map.values():
-                self._take_snapshot(obj)
                 object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
             
             self.engine.logger.info("[TRANSACTION]: Commit i wygaszenie (EXPIRE) obiektów.")
@@ -336,27 +267,11 @@ class Session:
 
 
     def refresh(self, instance):
-        mapper = instance._mapper
+        mapper = MiniBase._registry.get(instance.__class__)
         pk_name = mapper.pk
+        pk_val = object.__getattribute__(instance, pk_name)
         
-        # SCEPTYCZNA POPRAWKA: Szukamy ID w IdentityMap, tam na pewno jest INT
-        pk_val = None
-        for (cls, id_val), inst in self.identity_map._map.items():
-            if inst is instance:
-                pk_val = id_val
-                break
-        
-        # Jeśli nie ma w mapie, to obiekt nie jest podpięty pod sesję!
-        if pk_val is None:
-            # Ostatnia deska ratunku: sprawdźmy surowy słownik instancji
-            pk_val = instance.__dict__.get(pk_name)
-
-        # Jeśli pk_val to nadal obiekt 'Number', rzućmy jasny błąd
-        if hasattr(pk_val, 'column_type'):
-            raise ValueError(f"Nie można odświeżyć obiektu {instance}, ponieważ nie posiada on tożsamości (ID).")
-
         sql, params = self.query_builder.build_select(mapper, {pk_name: pk_val}, limit=1)
-        # Teraz params będą zawierać czystą wartość, a nie obiekt Number
         rows = self.engine.execute(sql, params)
         
         if rows:
@@ -364,23 +279,16 @@ class Session:
             for name in mapper.columns.keys():
                 object.__setattr__(instance, name, row[name])
             object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
-            self._take_snapshot(instance)
         else:
             object.__setattr__(instance, '_orm_state', ObjectState.TRANSIENT)
 
-            
-
     def rollback(self):
+        """Cofa transakcję w bazie i przywraca spójność obiektów w pamięci."""
         self.engine.rollback()
         self.engine.logger.warning("[TRANSACTION]: Rollback wykonany. Przywracanie stanu obiektów...")
 
         for obj in list(self._new):
             mapper = obj._mapper
-            pk_val = getattr(obj, mapper.pk, None)
-            
-            if pk_val is not None:
-                self.identity_map.remove(obj.__class__, pk_val)
-            
             object.__setattr__(obj, mapper.pk, None)
             object.__setattr__(obj, '_orm_state', ObjectState.TRANSIENT)
 
@@ -388,6 +296,7 @@ class Session:
             mapper = obj._mapper
             pk_val = getattr(obj, mapper.pk)
             self.identity_map.add(obj.__class__, pk_val, obj)
+            object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
 
         for obj in self.identity_map._map.values():
             if getattr(obj, '_orm_state', None) != ObjectState.TRANSIENT:
@@ -396,6 +305,7 @@ class Session:
         self._new.clear()
         self._dirty.clear()
         self._deleted.clear()
+        
         self.engine.logger.warning("[TRANSACTION]: Stan sesji zresetowany.")
 
 
@@ -408,6 +318,44 @@ class Session:
         self._dirty.clear()
         self._deleted.clear()
         self.engine.logger.info("[SESSION]: Zamknięto i wyczyszczono mapę tożsamości.")
+
+    def _make_persistent(self, obj):
+        """Ensure an object from a query is attached to this session and identity map.
+
+        If an instance with the same class and primary key already exists in the
+        identity map, return that existing instance. Otherwise mark the object
+        as PERSISTENT, attach the session, add to the identity map and take a
+        snapshot for change detection.
+        """
+        if obj is None:
+            return None
+
+        mapper = getattr(obj, '_mapper', None)
+        if mapper is None:
+            return obj
+
+        # determine primary key name
+        pk_name = mapper.pk if isinstance(mapper.pk, str) else (mapper.pk[0] if isinstance(mapper.pk, list) and mapper.pk else None)
+        pk_val = getattr(obj, pk_name, None) if pk_name else None
+
+        if pk_val is None:
+            # Nothing we can do without a primary key; just attach session
+            object.__setattr__(obj, '_session', self)
+            return obj
+
+        existing = self.identity_map.get(obj.__class__, pk_val)
+        if existing:
+            # ensure existing is attached to this session
+            object.__setattr__(existing, '_session', self)
+            return existing
+
+        # register new persistent instance
+        object.__setattr__(obj, '_session', self)
+        object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
+        self.identity_map.add(obj.__class__, pk_val, obj)
+        # take snapshot for change detection
+        self._take_snapshot(obj)
+        return obj
 
     def __enter__(self):
         return self

@@ -35,7 +35,20 @@ class SchemaGenerator:
         table_name = self._quote(mapper.table_name)
         column_defs = []
 
-        for name, col in mapper.columns.items():
+        # For CONCRETE inheritance, include ALL columns (parent + local) in each table
+        # For CLASS inheritance, include only local columns (parent has its own table)
+        # For SINGLE inheritance, include all columns (shared table)
+        if mapper.inheritance and mapper.inheritance.strategy.name == "CONCRETE":
+            # CONCRETE: Each table gets all columns (duplicated from parent)
+            columns_to_include = mapper.columns
+        elif mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+            # CLASS: Only local columns (parent has separate table)
+            columns_to_include = mapper.local_columns
+        else:
+            # SINGLE or no inheritance: all columns
+            columns_to_include = mapper.columns
+
+        for name, col in columns_to_include.items():
             q_name = self._quote(name)
             sql_type = self.TYPE_MAP.get(col.dtype, "TEXT")
             
@@ -47,11 +60,13 @@ class SchemaGenerator:
             
             column_defs.append(f"{q_name} {sql_type} {' '.join(constraints)}".strip())
 
-        # Get local columns (columns not in parent) for table generation
+        # Add foreign key constraints for local columns only (not inherited ones)
         parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
-        for name, col in mapper.columns.items():
-            if name in parent_cols:
-                continue  # Skip inherited columns
+        for name, col in columns_to_include.items():
+            # Skip inherited columns for FK constraints (they're in parent table for CLASS)
+            if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+                if name in parent_cols:
+                    continue
             if hasattr(col, 'is_foreign_key') and col.is_foreign_key:
                 column_defs.append(
                     f"FOREIGN KEY({self._quote(name)}) REFERENCES "

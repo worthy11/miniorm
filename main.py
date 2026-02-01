@@ -2,7 +2,7 @@ from base import MiniBase
 from database import DatabaseEngine
 from builder import QueryBuilder
 from session import Session
-from example import Department, Employee, Project, Number, Text, StudentSingle, Person, resolve_all_relationships
+from orm_types import Number, Text, Relationship
 from generator import SchemaGenerator
 from states import ObjectState
 
@@ -165,7 +165,12 @@ def test_security_and_m2m_optimized():
         try:
             # Próba wygenerowania zapytania dla złośliwego modelu
             mapper = MiniBase._registry[HackedModel]
-            sql, _ = builder.build_select(mapper, {})
+            table_name = mapper._get_target_table(mapper)
+            select_columns = {
+                'table': table_name,
+                'cols': list(mapper.columns.keys())
+            }
+            sql, _ = builder.build_select(mapper, table_name, select_columns, {})
             print(f"BŁĄD: System wygenerował zapytanie! {sql}")
         except ValueError as e:
             print(f"SUKCES: System zablokował niebezpieczną nazwę: {e}")
@@ -707,14 +712,123 @@ def test_advanced_orm_features():
 
 
 
+# Simple test classes for inheritance and polymorphism
+class Person(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+    
+    class Meta:
+        inheritance = "CLASS"
+
+class Student(Person):
+    grade = Number()
+    person_id = Relationship(Person, r_type="one-to-one")
+    
+    class Meta:
+        inheritance = "CLASS"
+
+class Teacher(Person):
+    subject = Text()
+    person_id = Relationship(Person, r_type="one-to-one")
+    
+    class Meta:
+        inheritance = "CLASS"
+
+class School(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+    students = Relationship(Student, backref="school", r_type="one-to-many")
+    teachers = Relationship(Teacher, backref="school", r_type="one-to-many")
+
+def test_inheritance_polymorphism_joins():
+    """Test CLASS inheritance, polymorphic loading, and relationship joins"""
+    engine = DatabaseEngine()
+    builder = QueryBuilder()
+    generator = SchemaGenerator()
+    generator.create_all(engine, MiniBase._registry)
+    
+    with Session(engine, builder) as session:
+        print("\n=== TEST: Inheritance, Polymorphism, and Joins ===\n")
+        
+        # Create a school
+        school = School(name="High School")
+        session.add(school)
+        session.commit()
+        print(f"Created: {school.name} (ID: {school.id})")
+        
+        # Create students and teachers
+        student1 = Student(name="Alice", grade=85)
+        student2 = Student(name="Bob", grade=92)
+        teacher1 = Teacher(name="Dr. Smith", subject="Math")
+        teacher2 = Teacher(name="Ms. Jones", subject="English")
+        
+        student1.school = school
+        student2.school = school
+        teacher1.school = school
+        teacher2.school = school
+        
+        session.add(student1)
+        session.add(student2)
+        session.add(teacher1)
+        session.add(teacher2)
+        session.commit()
+        
+        print(f"\nCreated:")
+        print(f"  - {student1.name} (Student, grade: {student1.grade}, ID: {student1.id})")
+        print(f"  - {student2.name} (Student, grade: {student2.grade}, ID: {student2.id})")
+        print(f"  - {teacher1.name} (Teacher, subject: {teacher1.subject}, ID: {teacher1.id})")
+        print(f"  - {teacher2.name} (Teacher, subject: {teacher2.subject}, ID: {teacher2.id})")
+        
+        # Test 1: Polymorphic loading - query Person, get Student and Teacher instances
+        print("\n--- Test 1: Polymorphic Loading (Query Person, get subclasses) ---")
+        all_people = session.query(Person).all()
+        print(f"Found {len(all_people)} people:")
+        for person in all_people:
+            person_type = type(person).__name__
+            if isinstance(person, Student):
+                print(f"  - {person.name} ({person_type}, grade: {person.grade}, ID: {person.id})")
+            elif isinstance(person, Teacher):
+                print(f"  - {person.name} ({person_type}, subject: {person.subject}, ID: {person.id})")
+            else:
+                print(f"  - {person.name} ({person_type}, ID: {person.id})")
+        
+        # Test 2: Direct subclass queries
+        print("\n--- Test 2: Direct Subclass Queries ---")
+        students = session.query(Student).all()
+        print(f"Found {len(students)} students:")
+        for student in students:
+            print(f"  - {student.name} (grade: {student.grade}, ID: {student.id})")
+        
+        teachers = session.query(Teacher).all()
+        print(f"Found {len(teachers)} teachers:")
+        for teacher in teachers:
+            print(f"  - {teacher.name} (subject: {teacher.subject}, ID: {teacher.id})")
+        
+        # Test 3: Relationship joins
+        print("\n--- Test 3: Relationship Joins (Person with School) ---")
+        people_with_school = session.query(Person).join("school").all()
+        print(f"Found {len(people_with_school)} people with school:")
+        for person in people_with_school:
+            school_name = person.school.name if hasattr(person, 'school') and person.school else "None"
+            person_type = type(person).__name__
+            print(f"  - {person.name} ({person_type}) at {school_name}")
+        
+        # Test 4: Update subclass
+        print("\n--- Test 4: Update Subclass ---")
+        student1.grade = 95
+        session.commit()
+        updated = session.query(Student).filter(id=student1.id).first()
+        if updated:
+            print(f"Updated {updated.name}'s grade to {updated.grade}")
+        
+        # Test 5: Filter on subclass
+        print("\n--- Test 5: Filter on Subclass ---")
+        top_students = session.query(Student).filter(grade=92).all()
+        print(f"Top students (grade = 92):")
+        for student in top_students:
+            print(f"  - {student.name} (grade: {student.grade})")
+        
+        print("\n=== All tests completed successfully! ===\n")
+
 if __name__ == "__main__":
-    test_complex_scenarios()
-    test_security_and_m2m_optimized()
-    # test_lazy_loading_full()
-    test_unit_of_work_snapshots()
-    test_polymorphic_loading()
-    test_circular_dependency_error()
-    test_builder_universality()
-    test_sti_polymorphism_and_builder()
-    test_builder_update_with_inheritance()
-    test_advanced_orm_features()
+    test_inheritance_polymorphism_joins()

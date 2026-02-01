@@ -9,13 +9,6 @@ class Mapper:
         self.discriminator = self.meta.get("discriminator", "type")
         self.discriminator_value = self.meta.get("discriminator_value", cls.__name__)
         
-        # Table name resolution: Meta.table_name > __tablename__ > default
-        self.table_name = (
-            self.meta.get("table_name") or
-            getattr(cls, "__tablename__", None) or
-            cls.__name__.lower() + "s"
-        )
-        
         self.pk = None
         self.parent = None
         self.inheritance = None
@@ -24,11 +17,12 @@ class Mapper:
         self.discriminator_map = None  # For SINGLE inheritance: maps discriminator values to classes
         self.children = []  # For CLASS inheritance: list of child mappers
 
-        self.resolve_parent()
-        self.resolve_inheritance()
-        self.resolve_columns()
-        self.resolve_pk()
-        self.resolve_relationships()
+        self._resolve_parent()
+        self._resolve_inheritance()
+        self._resolve_table_name()
+        self._resolve_columns()
+        self._resolve_pk()
+        self._resolve_relationships()
 
     def __repr__(self):
         cols = ", ".join(self.columns.keys())
@@ -40,13 +34,13 @@ class Mapper:
             f"columns=[{cols}] pk={pk} inheritance={inherit} parent={parent}>"
         )
         
-    def resolve_parent(self):
+    def _resolve_parent(self):
         for base in self.cls.__bases__:
             if hasattr(base, "_mapper"):
                 self.parent = base._mapper
                 return
 
-    def resolve_inheritance(self):
+    def _resolve_inheritance(self):
         if not self.parent:
             self.inheritance = None
             return None
@@ -70,19 +64,22 @@ class Mapper:
         
         from inheritance import Inheritance
         self.inheritance = Inheritance(strategy, discriminator_value)
-        
+    
+    def _resolve_table_name(self):
+        self.table_name = self.meta.get("table_name", self.cls.__name__+"s")
+        if self.inheritance:
+            self.inheritance.strategy.resolve_table_name(self)
 
-    def resolve_columns(self):
+    def _resolve_columns(self):
         if self.inheritance:
             self.inheritance.strategy.resolve_columns(self)
-            # Set discriminator column reference in strategy (from parent or root)
-            if self.inheritance.strategy.discriminator is None:
-                # Find root mapper to get discriminator column
+
+            if self.inheritance.discriminator is None:
                 root = self
                 while root.parent:
                     root = root.parent
                 if root.discriminator in root.columns:
-                    self.inheritance.strategy.discriminator = root.columns[root.discriminator]
+                    self.inheritance.discriminator = root.columns[root.discriminator]
             
             # add class to discriminator_map
             if self.inheritance.strategy.name == "SINGLE":
@@ -97,13 +94,54 @@ class Mapper:
             
             # add mapper to parent's children
             if self.inheritance and self.inheritance.strategy.name == "CLASS":
+                # Validate that a Relationship exists that will create a FK column pointing to the parent
+                # CLASS inheritance only allows relationships, not direct ForeignKey columns
+                fk_found = False
+                
+                # Check relationships that point to parent
+                # Check both already-collected relationships and class __dict__ directly
+                # First check already-collected relationships
+                relationships_to_check = list(self.relationships.items())
+                # Also check class __dict__ for relationships not yet collected
+                for name, val in self.cls.__dict__.items():
+                    if isinstance(val, Relationship) and name not in self.relationships:
+                        relationships_to_check.append((name, val))
+                
+                # Check if there's a relationship pointing to the parent class
+                for rel_name, rel in relationships_to_check:
+                    # Try to resolve the target class
+                    target_cls = self._resolve_target_class(rel.target)
+                    if target_cls is not None:
+                        # Check if the target is the parent class
+                        if target_cls == self.parent.cls:
+                            # This relationship will create a FK column pointing to parent
+                            # For many-to-one or one-to-one, the FK will be in this table
+                            if rel.r_type in ("many-to-one", "one-to-one"):
+                                fk_found = True
+                                break
+                
+                if not fk_found:
+                    raise ValueError(
+                        f"CLASS inheritance requires a Relationship pointing to parent class '{self.parent.cls.__name__}'. "
+                        f"Class '{self.cls.__name__}' is missing this relationship. "
+                        f"Add a Relationship with r_type='many-to-one' or r_type='one-to-one' pointing to '{self.parent.cls.__name__}'."
+                    )
+                
                 root = self
                 while root.parent:
                     root = root.parent
                 if self not in root.children:
                     root.children.append(self)
 
-    def resolve_pk(self):
+    @property
+    def local_columns(self):
+        """Return only columns that are local to this class (not inherited from parent)."""
+        if not self.parent:
+            return self.columns
+        parent_cols_set = set(self.parent.columns.keys())
+        return {name: col for name, col in self.columns.items() if name not in parent_cols_set}
+
+    def _resolve_pk(self):
         pk_cols = [name for name, col in self.columns.items() if col.pk]
 
         if not pk_cols and self.parent:
@@ -116,7 +154,7 @@ class Mapper:
         else:
             raise Exception(f"No primary key defined for class {self.cls.__name__}")
 
-    def resolve_relationships(self):
+    def _resolve_relationships(self):
         for name, val in self.cls.__dict__.items():
             if isinstance(val, Relationship):
                 self.relationships[name] = val
@@ -139,7 +177,8 @@ class Mapper:
             if name.endswith("_id"):
                 fk_name = name
             else:
-                fk_name = f"{target_table.rstrip('s')}_id"
+                # Normalize to lowercase for consistency
+                fk_name = f"{target_table.rstrip('s').lower()}_id"
         
         if rel.r_type in ("many-to-one", "one-to-one"):
             if fk_name not in self.columns:
@@ -165,7 +204,8 @@ class Mapper:
             
             target_fk_name = rel.fk_name
             if target_fk_name is None:
-                target_fk_name = f"{source_table.rstrip('s')}_id"
+                # Normalize to lowercase for consistency
+                target_fk_name = f"{source_table.rstrip('s').lower()}_id"
             
             if target_fk_name not in target_mapper.columns:
                 fk_col = ForeignKey(
@@ -236,48 +276,71 @@ class Mapper:
         reverse_rel._resolved_target = source_cls
         target_mapper.relationships[backref_name] = reverse_rel
     
-    def hydrate(self, row_dict, base_class=None):
+    def hydrate(self, row_dict):
         """
         Create an object instance from a dictionary of row data.
         Only creates and populates the object - does not manage state.
+        Determines the correct class based on inheritance strategy and row data.
         
         Args:
             row_dict: Dictionary mapping column names to values
-            base_class: Optional base class to start from (for inheritance resolution)
             
         Returns:
             Object instance with populated attributes
         """
         from base import MiniBase
+        from orm_types import ForeignKey
         
-        # Determine target class based on discriminator (for inheritance)
-        target_cls = base_class or self.cls
-        if self.inheritance and self.inheritance.strategy.name == "SINGLE":
-            # Find root mapper to get discriminator_map
-            root = self
-            while root.parent:
-                root = root.parent
-            disc_col_name = root.discriminator  # Use discriminator name from root
+        target_cls = self.cls
+        
+        if self.inheritance:
+            if self.inheritance.strategy.name == "SINGLE":
+                # use discriminator value to find class
+                root = self
+                while root.parent:
+                    root = root.parent
+                disc_col_name = root.discriminator
+                
+                if disc_col_name and disc_col_name in row_dict and root.discriminator_map:
+                    row_type_value = row_dict.get(disc_col_name)
+                    if row_type_value in root.discriminator_map:
+                        target_cls = root.discriminator_map[row_type_value]
             
-            if disc_col_name and disc_col_name in row_dict and root.discriminator_map:
-                row_type_value = row_dict.get(disc_col_name)
-                # Use discriminator_map from root mapper to find class
-                if row_type_value in root.discriminator_map:
-                    target_cls = root.discriminator_map[row_type_value]
+            elif self.inheritance.strategy.name == "CLASS" and not self.parent:
+                # check which subclass table has a non-null FK
+                for child_mapper in self.children:
+                    fk_col = None
+                    # Find FK column created by relationship pointing to parent
+                    for col_name, col in child_mapper.columns.items():
+                        # Check for actual ForeignKey
+                        if isinstance(col, ForeignKey) and col.target_table == self.table_name:
+                            fk_col = col_name
+                            break
+                    # If not found in columns, try to find it from relationships
+                    if fk_col is None:
+                        for rel_name, rel in child_mapper.relationships.items():
+                            target_cls = child_mapper._resolve_target_class(rel.target)
+                            if target_cls == self.cls and rel.r_type in ("many-to-one", "one-to-one"):
+                                # The FK name will be resolved during relationship resolution
+                                if hasattr(rel, '_resolved_fk_name') and rel._resolved_fk_name:
+                                    fk_col = rel._resolved_fk_name
+                                    break
+                    if fk_col is None:
+                        fk_col = f"{self.table_name.rstrip('s').lower()}_id"
+                    
+                    alias_key = f"{child_mapper.table_name}_{fk_col}"
+                    fk_value = row_dict.get(alias_key) or row_dict.get(fk_col)
+                    if fk_value is not None:
+                        target_cls = child_mapper.cls
+                        break
         
-        # Create new instance
         obj = target_cls()
         target_mapper = target_cls._mapper
         
-        # Set column values
-        # For CLASS inheritance, columns from subclass tables are aliased as {table}_{column}
         for name, value in row_dict.items():
             if name in target_mapper.columns:
                 object.__setattr__(obj, name, value)
             elif target_mapper.inheritance and target_mapper.inheritance.strategy.name == "CLASS":
-                # Check if this is an aliased column from a subclass table
-                # Format: {table_name}_{column_name}
-                # Get local columns (columns not in parent) for CLASS inheritance
                 parent_cols = set(target_mapper.parent.columns.keys()) if target_mapper.parent else set()
                 local_cols = [col_name for col_name in target_mapper.columns.keys() if col_name not in parent_cols]
                 for col_name in local_cols:
