@@ -14,8 +14,7 @@ class Mapper:
         self.inheritance = None
         
         self.declared_columns = dict(columns)
-        self.columns = {} 
-        self.local_columns = {}
+        self.columns = {}
         
         self.relationships = {}
         self.discriminator_map = None  # For SINGLE inheritance: maps discriminator values to classes
@@ -69,67 +68,65 @@ class Mapper:
             self.inheritance.strategy.resolve_table_name(self)
 
     def _resolve_columns(self):
-        if self.inheritance:
-            self.inheritance.strategy.resolve_columns(self)
+        if not self.inheritance:
+            # No inheritance: use declared columns as-is
+            self.columns = dict(self.declared_columns)
+            return
+        # Start with child's declared columns so strategy can merge with parent
+        self.columns = dict(self.declared_columns)
+        self.inheritance.strategy.resolve_columns(self)
 
-            if self.inheritance.discriminator is None:
-                root = self
-                while root.parent:
-                    root = root.parent
-                if root.discriminator in root.columns:
-                    self.inheritance.discriminator = root.columns[root.discriminator]
-            
-            # add class to discriminator_map
-            if self.inheritance.strategy.name == "SINGLE":
-                root = self
-                while root.parent:
-                    root = root.parent
+        if self.inheritance.discriminator is None:
+            root = self
+            while root.parent:
+                root = root.parent
+            if root.discriminator in root.columns:
+                self.inheritance.discriminator = root.columns[root.discriminator]
+        
+        # add class to discriminator_map
+        if self.inheritance.strategy.name == "SINGLE":
+            root = self
+            while root.parent:
+                root = root.parent
 
-                # create discriminator map at root
-                if root.discriminator_map is None:
-                    root.discriminator_map = {}
-                root.discriminator_map[self.inheritance.discriminator_value] = self.cls
+            # create discriminator map at root
+            if root.discriminator_map is None:
+                root.discriminator_map = {}
+            root.discriminator_map[self.inheritance.discriminator_value] = self.cls
+        
+        if self.inheritance and self.inheritance.strategy.name == "CLASS":
+            fk_found = False
             
-            # add mapper to parent's children
-            if self.inheritance and self.inheritance.strategy.name == "CLASS":
-                # Validate that a Relationship exists that will create a FK column pointing to the parent
-                # CLASS inheritance only allows relationships, not direct ForeignKey columns
-                fk_found = False
-                
-                # Check relationships that point to parent
-                # Check both already-collected relationships and class __dict__ directly
-                # First check already-collected relationships
-                relationships_to_check = list(self.relationships.items())
-                # Also check class __dict__ for relationships not yet collected
-                for name, val in self.cls.__dict__.items():
-                    if isinstance(val, Relationship) and name not in self.relationships:
-                        relationships_to_check.append((name, val))
-                
-                # Check if there's a relationship pointing to the parent class
-                for rel_name, rel in relationships_to_check:
-                    # Try to resolve the target class
-                    target_cls = self._resolve_target_class(rel.target)
-                    if target_cls is not None:
-                        # Check if the target is the parent class
-                        if target_cls == self.parent.cls:
-                            # This relationship will create a FK column pointing to parent
-                            # For many-to-one or one-to-one, the FK will be in this table
-                            if rel.r_type in ("many-to-one", "one-to-one"):
-                                fk_found = True
-                                break
-                
-                if not fk_found:
-                    raise ValueError(
-                        f"CLASS inheritance requires a Relationship pointing to parent class '{self.parent.cls.__name__}'. "
-                        f"Class '{self.cls.__name__}' is missing this relationship. "
-                        f"Add a Relationship with r_type='many-to-one' or r_type='one-to-one' pointing to '{self.parent.cls.__name__}'."
-                    )
-                
-                root = self
-                while root.parent:
-                    root = root.parent
-                if self not in root.children:
-                    root.children.append(self)
+            relationships_to_check = list(self.relationships.items())
+            for name, val in self.cls.__dict__.items():
+                if isinstance(val, Relationship) and name not in self.relationships:
+                    relationships_to_check.append((name, val))
+            
+            # Check if there's a relationship pointing to the parent class
+            for rel_name, rel in relationships_to_check:
+                # Try to resolve the target class
+                target_cls = self._resolve_target_class(rel.target)
+                if target_cls is not None:
+                    # Check if the target is the parent class
+                    if target_cls == self.parent.cls:
+                        # This relationship will create a FK column pointing to parent
+                        # For many-to-one or one-to-one, the FK will be in this table
+                        if rel.r_type in ("many-to-one", "one-to-one"):
+                            fk_found = True
+                            break
+            
+            if not fk_found:
+                raise ValueError(
+                    f"CLASS inheritance requires a Relationship pointing to parent class '{self.parent.cls.__name__}'. "
+                    f"Class '{self.cls.__name__}' is missing this relationship. "
+                    f"Add a Relationship with r_type='many-to-one' or r_type='one-to-one' pointing to '{self.parent.cls.__name__}'."
+                )
+            
+            root = self
+            while root.parent:
+                root = root.parent
+            if self not in root.children:
+                root.children.append(self)
 
     @property
     def local_columns(self):
@@ -178,7 +175,6 @@ class Mapper:
             if fk_name not in self.columns:
                 fk_col = ForeignKey(target_table, target_pk, nullable=(rel.r_type == "many-to-one"))
                 self.columns[fk_name] = fk_col
-                self.local_columns[fk_name] = fk_col
             rel._resolved_fk_name = fk_name
             if rel.backref:
                 self._setup_backref(target_mapper, rel.backref, self.cls, rel.r_type)
@@ -235,6 +231,19 @@ class Mapper:
                 if cls.__name__ == target: return cls
         return None
 
+    def _get_target_table(self, target_mapper):
+        """Return the table name for a mapper (respects inheritance, e.g. root table for CLASS)."""
+        return getattr(target_mapper, "table_name", None)
+
+    def _get_target_pk(self, target_mapper):
+        """Return the primary key column name for a mapper."""
+        pk = getattr(target_mapper, "pk", None)
+        if isinstance(pk, str):
+            return pk
+        if isinstance(pk, list) and pk:
+            return pk[0]
+        return "id"
+
     def _setup_backref(self, target_mapper, backref_name, source_cls, r_type):
         if backref_name in target_mapper.relationships: return
         rev_type = "one-to-many" if r_type == "many-to-one" else "many-to-one"
@@ -243,18 +252,22 @@ class Mapper:
         reverse_rel._resolved_target = source_cls
         target_mapper.relationships[backref_name] = reverse_rel
     
+    def get(self, id):
+        return None
+    
+    def get_all(self):
+        return []
+    
+    def insert(self, entity):
+        return None
+    
+    def update(self, entity):
+        return None
+    
+    def delete(self, entity):
+        return None
+    
     def hydrate(self, row_dict):
-        """
-        Create an object instance from a dictionary of row data.
-        Only creates and populates the object - does not manage state.
-        Determines the correct class based on inheritance strategy and row data.
-        
-        Args:
-            row_dict: Dictionary mapping column names to values
-            
-        Returns:
-            Object instance with populated attributes
-        """
         from base import MiniBase
         from orm_types import ForeignKey
         

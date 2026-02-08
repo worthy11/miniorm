@@ -7,79 +7,94 @@ class Transaction(ABC):
         self.mapper = entity._mapper
 
     @abstractmethod
-    def execute(self):
+    def prepare(self):
+        """Prepare SQL and parameters. Returns list of (sql, params, callback, rebuild_fn) tuples.
+        
+        callback is a function that takes (result, previous_id) and applies side effects.
+        rebuild_fn is called before execution to rebuild SQL if needed (for FK updates).
+        """
         pass
-
-    def _sync_foreign_keys(self):
-        for name, rel in self.mapper.relationships.items():
-            if rel.r_type == "many-to-one":
-                parent_obj = getattr(self.entity, name, None)
-                if parent_obj:
-                    parent_pk_val = getattr(parent_obj, parent_obj._mapper.pk, None)
-                    if parent_pk_val is not None:
-                        setattr(self.entity, rel._resolved_fk_name, parent_pk_val)
 
 
 class InsertTransaction(Transaction):
-    def execute(self):
-        self._sync_foreign_keys()
-
-        data = {}
-        for col_name in self.mapper.columns:
-            if col_name == self.mapper.pk: continue
-            val = getattr(self.entity, col_name, None)
-            if val is not None:
-                data[col_name] = val
+    def prepare(self):
+        # Call mapper to prepare insert operations
+        operations = self.mapper.prepare_insert(self.entity, self.session.query_builder)
         
-        if "type" in self.mapper.columns and "type" not in data:
-             data["type"] = self.entity.__class__.__name__
-
-        sql, params = self.session.query_builder.build_insert(self.mapper, data)
-        new_id = self.session.engine.execute_insert(sql, params)
+        # Convert to list of (sql, params, callback, rebuild_fn) tuples
+        results = []
         
-        setattr(self.entity, self.mapper.pk, new_id)
-        self.session.identity_map.add(self.entity.__class__, new_id, self.entity)
+        for i, (sql, params, op_meta) in enumerate(operations):
+            is_last = (i == len(operations) - 1)
+            needs_fk = 'fk_from_previous' in op_meta
+            
+            def make_rebuild_fn(op_meta, needs_fk):
+                def rebuild_sql(previous_id):
+                    if needs_fk and previous_id is not None:
+                        fk_name = op_meta['fk_from_previous']
+                        setattr(self.entity, fk_name, previous_id)
+                        op_meta['data'][fk_name] = previous_id
+                        table_mapper = self.mapper._get_mapper_for_table(op_meta['table'])
+                        return self.session.query_builder.build_insert(table_mapper, op_meta['data'])
+                    return None, None
+                return rebuild_sql
+            
+            def make_callback(is_last):
+                def apply_side_effects(new_id, previous_id):
+                    # Only apply final side effects on last operation
+                    if is_last:
+                        setattr(self.entity, self.mapper.pk, new_id)
+                        self.session.identity_map.add(self.entity.__class__, new_id, self.entity)
+                        
+                        from states import ObjectState
+                        object.__setattr__(self.entity, '_orm_state', ObjectState.PERSISTENT)
+                        
+                        self.session._flush_m2m(self.entity)
+                        self.session._take_snapshot(self.entity)
+                
+                return apply_side_effects
+            
+            rebuild_fn = make_rebuild_fn(op_meta, needs_fk)
+            callback = make_callback(is_last)
+            results.append((sql, params, callback, rebuild_fn))
         
-        from states import ObjectState
-        object.__setattr__(self.entity, '_orm_state', ObjectState.PERSISTENT)
-
-
-        self.session._flush_m2m(self.entity)
-        self.session._take_snapshot(self.entity)
+        return results
 
 
 class UpdateTransaction(Transaction):
-    def execute(self):
-        self._sync_foreign_keys()
-
-        pk_val = getattr(self.entity, self.mapper.pk)
+    def prepare(self):
         old_state = self.session._snapshots.get(id(self.entity))
         
-        data = {}
-        if old_state:
-            for col_name in self.mapper.columns:
-                if col_name == self.mapper.pk: continue
-                new_val = getattr(self.entity, col_name, None)
-                old_val = old_state.get(col_name)
-                if new_val != old_val:
-                    data[col_name] = new_val
-        else:
-            for col_name in self.mapper.columns:
-                if col_name == self.mapper.pk: continue
-                val = getattr(self.entity, col_name, None)
-                if val is not None:
-                    data[col_name] = val
-
-        if data:
-            sql, params = self.session.query_builder.build_update(self.mapper, data, pk_val)
-            self.session.engine.execute(sql, params)
-
-        self.session._flush_m2m(self.entity)
-        self.session._take_snapshot(self.entity)
+        # Call mapper to prepare update operations
+        operations = self.mapper.prepare_update(self.entity, self.session.query_builder, old_state)
+        
+        if not operations:
+            return None, None, None, None  # No update needed
+        
+        # Convert to list of (sql, params, callback, rebuild_fn) tuples
+        results = []
+        for sql, params, op_meta in operations:
+            def apply_side_effects(result, previous_id):
+                self.session._flush_m2m(self.entity)
+                self.session._take_snapshot(self.entity)
+            
+            results.append((sql, params, apply_side_effects, None))
+        
+        return results if len(results) > 1 else results[0] if results else (None, None, None, None)
 
 class DeleteTransaction(Transaction):
-    def execute(self):
+    def prepare(self):
+        # Call mapper to prepare delete operations
+        operations = self.mapper.prepare_delete(self.entity, self.session.query_builder)
+        
+        # Convert to list of (sql, params, callback, rebuild_fn) tuples
+        results = []
         pk_val = getattr(self.entity, self.mapper.pk)
-        sql, params = self.session.query_builder.build_delete(self.mapper, pk_val)
-        self.session.engine.execute(sql, params)
-        self.session.identity_map.remove(self.entity.__class__, pk_val)
+        
+        for sql, params, op_meta in operations:
+            def apply_side_effects(result, previous_id):
+                self.session.identity_map.remove(self.entity.__class__, pk_val)
+            
+            results.append((sql, params, apply_side_effects, None))
+        
+        return results if len(results) > 1 else results[0] if results else (None, None, None, None)

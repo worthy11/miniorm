@@ -52,17 +52,51 @@ class Session:
                 self.unit_of_work.append(UpdateTransaction(self, obj))
 
         if not self.unit_of_work:
+            self._in_flush = False
             return
 
         try:
             while self.unit_of_work:
                 transaction = self.unit_of_work.popleft()
-                transaction.execute()
+                operations = transaction.prepare()
+                
+                # Handle both single operation and list of operations
+                if not isinstance(operations, list):
+                    operations = [operations]
+                
+                previous_id = None
+                for i, op in enumerate(operations):
+                    sql, params, apply_side_effects, rebuild_fn = op
+                    
+                    # Rebuild SQL if needed (for FK updates in CLASS inheritance)
+                    if rebuild_fn and previous_id is not None:
+                        new_sql, new_params = rebuild_fn(previous_id)
+                        if new_sql:
+                            sql, params = new_sql, new_params
+                    
+                    # Skip if no SQL to execute (e.g., update with no changes)
+                    if sql is None:
+                        continue
+                    
+                    # Execute SQL via engine
+                    from transactions import InsertTransaction
+                    if isinstance(transaction, InsertTransaction):
+                        result = self.engine.execute(sql, params, return_lastrowid=True)
+                        # Apply side effects before next operation (for FK propagation)
+                        if apply_side_effects:
+                            apply_side_effects(result, previous_id)
+                        previous_id = result
+                    else:
+                        self.engine.execute(sql, params)
+                        result = None
+                        # Apply side effects after execution
+                        if apply_side_effects:
+                            apply_side_effects(result, previous_id)
         except Exception as e:
             self.rollback()
             raise RuntimeError(f"Błąd podczas flush: {e}")
         finally:
-            self._in_flush=False
+            self._in_flush = False
 
     def _flush_m2m(self, instance):
         mapper = instance._mapper

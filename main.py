@@ -1,718 +1,118 @@
+"""
+Tests that different inheritance types (SINGLE, CLASS, CONCRETE) create appropriate mappers.
+Prints parent, children, table name and columns for each mapper.
+"""
+
 from base import MiniBase
-from database import DatabaseEngine
-from builder import QueryBuilder
-from session import Session
-from orm_types import Number, Text, Relationship
-from generator import SchemaGenerator
-import logging
-
-def test_complex_scenarios():
-    resolve_all_relationships()
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-
-    with Session(engine, builder) as session:
-        print("\n--- 1. Test Kolejności INSERT (Rodzic + Dziecko) ---")
-        dept = Department(name="IT")
-        emp = Employee(name="Adam")
-        
-        emp.department = dept
-        session.add(emp)
-        
-        session.commit()
-        print(f"Zapisano: {dept.name} (ID:{dept.id}) i {emp.name} (DeptID:{emp.department_id})")
-
-        print("\n--- 2. Test Widoczności DELETED w Query ---")
-        session.delete(emp)
-        
-        employees = session.query(Employee).all()
-        print(f"Liczba znalezionych pracowników (powinno być 0): {len(employees)}")
-        session.rollback()
-
-        print("\n--- 3. Test Kolejności DELETE (Dziecko przed Rodzicem) ---")
-        session.delete(dept)
-        try:
-            session.commit()
-            print("Pomyślnie usunięto całą strukturę w poprawnej kolejności.")
-        except Exception as e:
-            print(f"Błąd usuwania: {e}")
-
-    with Session(engine, builder) as session:
-        print("\n--- 4. Test Automatycznego Dirty Checking ---")
-        dept_it = Department(name="HR")
-        session.add(dept_it)
-        session.commit()
-        
-        dept_it.name = "Human Resources" 
-        session.commit()
-        
-        check_dept = engine.execute("SELECT name FROM departments WHERE id = ?", (dept_it.id,))
-        print(f"Nazwa w bazie po automatycznym update: {check_dept[0]['name']}")
-
-        print("\n--- 5. Test Identity Map i Rollback Delete ---")
-        emp_test = Employee(name="Patryk")
-        session.add(emp_test)
-        session.commit()
-        
-        session.delete(emp_test)
-        print(f"Stan przed rollback: {emp_test._orm_state}")
-        
-        session.rollback()
-        print(f"Stan po rollback: {emp_test._orm_state}")
-        print(f"Imię po wskrzeszeniu: {emp_test.name}")
-
-        print("\n--- 6. Test Stanu DETACHED ---")
-        detached_emp = session.query(Employee).filter(name="Patryk").first()
+from orm_types import Text, Number, Relationship
 
 
-    if detached_emp:
-        print(f"Stan obiektu po zamknięciu sesji: {detached_emp._orm_state}")
-        try:
-            print(f"Dane odłączonego obiektu: {detached_emp.name}")
-        except Exception as e:
-            print(f"Błąd dostępu do danych: {e}")
+def print_mapper_info(cls_name, mapper):
+    """Print parent, children, table name and columns for a mapper."""
+    parent = mapper.parent.cls.__name__ if mapper.parent else None
+    children = [m.cls.__name__ for m in mapper.children] if mapper.children else []
+    table_name = getattr(mapper, "table_name", "?")
+    columns = list(mapper.columns.keys()) if mapper.columns else []
+    local_cols = list(mapper.local_columns.keys()) if getattr(mapper, "local_columns", None) else []
+
+    inheritance = "None"
+    if mapper.inheritance:
+        inheritance = mapper.inheritance.strategy.name
+
+    print(f"  Class: {cls_name}")
+    print(f"  Inheritance: {inheritance}")
+    print(f"  Table name: {table_name}")
+    print(f"  Parent: {parent}")
+    print(f"  Children: {children}")
+    print(f"  Columns (all): {columns}")
+    print(f"  Local columns: {local_cols}")
+    print()
 
 
-    with Session(engine, builder) as session:
-        print("\n--- 8. Test: Double Add (Add -> Delete -> Add) ---")
-        new_dept = Department(name="Temporary")
-        session.add(new_dept)
-        session.flush()
-        
-        session.delete(new_dept)
-        session.add(new_dept) 
-        
-        session.commit()
-        res = session.query(Department).filter(name="Temporary").first()
-        print(f"Czy departament przetrwał karuzelę stanów? {'Tak' if res else 'Nie'}")
-
-    with Session(engine, builder) as session:
-        print("\n--- 9. Test: Tożsamość referencji (is) ---")
-        e1 = session.get(Employee, 2)
-        e2 = session.get(Employee, 2)
-        
-        print(f"Czy e1 to ten sam obiekt co e2? {e1 is e2}")
-        if e1 is e2:
-            e1.name = "Nowe Imie Patryka"
-            print(f"Zmiana w e1 widoczna w e2? {e2.name == 'Nowe Imie Patryka'}")
-
-
-def test_security_and_m2m_optimized():
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-    
-    print("\n--- 11. Test Penetracyjny: SQL Injection w nazwie tabeli ---")
-    class HackedModel(MiniBase):
-        __tablename__ = "users; DROP TABLE employees; --"
-        id = Number(pk=True)
-
-        try:
-            # Próba wygenerowania zapytania dla złośliwego modelu
-            mapper = MiniBase._registry[HackedModel]
-            table_name = mapper._get_target_table(mapper)
-            select_columns = {
-                'table': table_name,
-                'cols': list(mapper.columns.keys())
-            }
-            sql, _ = builder.build_select(mapper, table_name, select_columns, {})
-            print(f"BŁĄD: System wygenerował zapytanie! {sql}")
-        except ValueError as e:
-            print(f"SUKCES: System zablokował niebezpieczną nazwę: {e}")
-        finally:
-        # Musimy posprzątać w rejestrze, żeby inne testy nie wybuchały
-            if HackedModel in MiniBase._registry:
-                del MiniBase._registry[HackedModel]
-
-    print("\n--- 12. Test: Many-To-Many (Insert & Update & Delete) ---")
-    with Session(engine, builder) as session:
-        p1 = Project(name="CyberSecurity")
-        p2 = Project(name="AI Development")
-        e1 = Employee(name="Hacker")
-        
-        # 1. Insert z relacją
-        e1.projects = [p1]
-        session.add(e1)
-        session.commit()
-        print("Zapisano pracownika z 1 projektem.")
-
-        # 2. Update (Dodanie drugiego projektu) - Delta Update
-        e1.projects.append(p2)
-        session.commit()
-        print("Zaktualizowano: dodano drugi projekt.")
-
-        # 3. Update (Usunięcie pierwszego projektu) - Delta Update
-        e1.projects.remove(p1)
-        session.commit()
-        print("Zaktualizowano: usunięto pierwszy projekt.")
-        
-        # Weryfikacja
-        check_e1 = session.query(Employee).filter(name="Hacker").first()
-        print(f"Aktualne projekty w bazie: {[p.name for p in check_e1.projects]}")
-
-def test_lazy_loading_full():
-    # Czyścimy śmieci po poprzednich testach
-    to_remove = [cls for cls in MiniBase._registry if "DROP TABLE" in getattr(cls, "__tablename__", "")]
-    for cls in to_remove:
-        del MiniBase._registry[cls]
-        
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    
-    print("\n--- 10. Test: Many-To-Many i Lazy Loading ---")
-    generator.create_all(engine, MiniBase._registry)
-
-    with Session(engine, builder) as session:
-        it_dept = Department(name="IT Cloud")
-        p1 = Project(name="System Migracji")
-        p2 = Project(name="Bezpieczeństwo")
-        
-        emp1 = Employee(name="Kamil")
-        emp2 = Employee(name="Marta")
-
-        emp1.department = it_dept
-        emp2.department = it_dept
-        emp1.projects = [p1, p2] 
-        emp2.projects = [p1]
-
-        session.add(emp1)
-        session.add(emp2)
-        session.commit()
-        print("Zapisano dane i zamknięto sesję (obiekty przeszły w EXPIRED).")
-
-    # Nowa sesja - sprawdzamy dociąganie
-    with Session(engine, builder) as session:
-        print("\n--- Sprawdzanie Lazy Loadingu (Nowa Sesja) ---")
-        kamil = session.query(Employee).filter(name="Kamil").first()
-        
-        # PRZYPADEK 1: Many-To-One
-        dept_name = kamil.department.name 
-        print(f"1. Many-to-One OK: {dept_name}")
-
-        # PRZYPADEK 2: Many-To-Many
-        projects = [p.name for p in kamil.projects]
-        print(f"2. Many-to-Many OK: {projects}")
-        
-        # PRZYPADEK 3: One-To-Many
-        dept = kamil.department
-        colleagues = [e.name for e in dept.employees]
-        print(f"3. One-to-Many OK: {colleagues}")
-
-def test_unit_of_work_snapshots():
-    print("\n--- 13. Test: Snapshoty i Auto-Refresh (EXPIRED) ---")
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-
-    with Session(engine, builder) as session:
-        d1 = Department(name="R&D")
-        session.add(d1)
-        session.commit() # Obiekt d1 staje się EXPIRED
-
-        print(f"Stan obiektu po commit: {d1._orm_state}")
-        
-        print(f"Dociąganie nazwy (Lazy Refresh): {d1.name}")
-        print(f"Stan po refreshu: {d1._orm_state}")
-
-        # Test Dirty Checkingu
-        d1.name = "R&D"
-        print("Wykonuję flush (nie powinno być SQL UPDATE, bo nazwa ta sama)...")
-        session.flush()
-
-        d1.name = "Research and Development"
-        print("Wykonuję flush (powinien być SQL UPDATE)...")
-        session.flush()
-
-def test_builder_universality():
-    print("\n--- 16. Test: Uniwersalny Builder ---")
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    
-    class MockMapper:
-        table_name = "test_table"
-        pk = "id"
-    
-    data = {"name": "Test", "value": 123, "type": "MockType"}
-    sql, params = builder.build_insert(MockMapper(), data)
-    
-    print(f"Wygenerowany SQL: {sql}")
-    if "type" in sql and "?" in sql:
-        print("SUKCES: Builder poprawnie generuje zapytania ze słowników.")
-    else:
-        print(f"BŁĄD: SQL Buildera jest niepoprawny: {sql}")
-
-
-def test_sti_polymorphism_and_builder():
-    print("\n--- 17. Test: STI, Polimorfizm i Poprawność Buildera ---")
-    resolve_all_relationships()
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-
-    with Session(engine, builder) as session:
-        # Tworzymy różne typy osób w tej samej tabeli (STI)
-        p1 = Person(name="Zwykły Jan")
-        s1 = StudentSingle(name="Student Adam", grade=4)
-        
-        session.add(p1)
-        session.add(s1)
-        session.commit()
-
-    with Session(engine, builder) as session:
-        # Test 1: Czy query(StudentSingle) dodało automatycznie filtr type='StudentSingle'?
-        students = session.query(StudentSingle).all()
-        print(f"Liczba pobranych studentów: {len(students)}")
-        for s in students:
-            print(f" - {s.name}, klasa: {type(s).__name__}")
-        
-        # Sprawdzamy, czy nie pobrało 'Zwykły Jan' jako studenta
-        if any(s.name == "Zwykły Jan" for s in students):
-            print("BŁĄD: Builder nie przefiltrował rekordów po dyskryminatorze!")
-        else:
-            print("SUKCES: Builder poprawnie odizolował podklasę w STI.")
-
-        # Test 2: Polimorficzne ładowanie przez klasę bazową
-        all_people = session.query(Person).all()
-        print(f"Całkowita liczba osób: {len(all_people)}")
-        for p in all_people:
-            print(f" - {p.name}, rozpoznany typ: {type(p).__name__}")
-
-def test_builder_update_with_inheritance():
-    print("\n--- 18. Test: Builder Update i fizyczna tabela ---")
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    
-    # Testujemy, czy build_update trafia w dobrą tabelę przy STI
-    from example import StudentSingle
-    mapper = StudentSingle._mapper
-    
-    data = {"name": "Nowe Imie", "grade": 6}
-    sql, params = builder.build_update(mapper, data, 1)
-    
-    print(f"Wygenerowany SQL UPDATE: {sql}")
-    # Powinno być "persons" a nie "studentsingles"
-    if "\"people\"" in sql:
-        print("SUKCES: Builder użył tabeli bazowej dla podklasy STI.")
-    else:
-        print("BŁĄD: Builder próbuje aktualizować nieistniejącą tabelę podklasy.")
-
-
-def test_advanced_orm_features():
-    print("\n=== 19. Mega Test: 5 Zaawansowanych Scenariuszy ===")
-    resolve_all_relationships()
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-
-    # SCENARIUSZ 1: Automatyczna synchronizacja FK i dociąganie (Lazy Loading)
-    print("\n--- Scenariusz 1: Auto-FK Sync & Lazy Loading ---")
-    with Session(engine, builder) as session:
-        it_dept = Department(name="IT Core")
-        emp = Employee(name="Krzysztof")
-        emp.department = it_dept # Przypisujemy obiekt, nie ID
-        session.add(emp)
-        session.commit()
-        
-        # Sprawdzamy, czy system sam uzupełnił 'department_id' w obiekcie emp
-        if emp.department_id == it_dept.id:
-            print(f"SUKCES: Klucz obcy zsynchronizowany automatycznie ({emp.department_id})")
-        else:
-            print(f"BŁĄD: Brak synchronizacji FK! ID: {emp.department_id}")
-
-    # SCENARIUSZ 2: Izolacja Sesji i Identity Map
-    print("\n--- Scenariusz 2: Izolacja Sesji (Dwie sesje obok siebie) ---")
-    session1 = Session(engine, builder)
-    session2 = Session(engine, builder)
-    
-    e_s1 = session1.get(Employee, emp.id)
-    e_s2 = session2.get(Employee, emp.id)
-    
-    print(f"Czy e1 i e2 to te same instancje? {e_s1 is e_s2} (Powinno być False)")
-    if e_s1 is not e_s2:
-        print("SUKCES: Sesje są odizolowane, każda ma własną Identity Map.")
-    
-    session1.close()
-    session2.close()
-
-    # SCENARIUSZ 3: Złożone Filtrowanie i Paginacja
-    print("\n--- Scenariusz 3: Filtrowanie + Paginacja ---")
-    with Session(engine, builder) as session:
-        # Czyścimy dla pewności i dodajemy 5 pracowników
-        for i in range(5):
-            session.add(Employee(name=f"Worker {i}"))
-        session.commit()
-        
-        # Oczekujemy dokładnie rekordów 3 i 4 (indeksy 2, 3 od początku listy tych z NULL)
-        results = session.query(Employee).filter(department_id=None).limit(3).offset(2).all()
-        
-        print(f"Pobrano {len(results)} rekordów (Oczekiwano: 3).")
-        # Sceptyczne sprawdzenie:
-        if len(results) == 3:
-            print("SUKCES: Paginacja i filtrowanie IS NULL działają.")
-        else:
-            print(f"BŁĄD: Paginacja zwróciła niewłaściwą liczbę wyników: {len(results)}")
-
-    # SCENARIUSZ 4: Stabilność stanów po Rollbacku
-    print("\n--- Scenariusz 4: Karuzela stanów (Rollback test) ---")
-    with Session(engine, builder) as session:
-        new_dept = Department(name="To Delete")
-        session.add(new_dept)
-        session.flush() # Wstawiamy do bazy
-        
-        old_id = new_dept.id
-        session.rollback() # Cofamy wszystko
-        
-        print(f"Stan obiektu po rollbacku: {new_dept._orm_state}")
-        if new_dept._orm_state == ObjectState.TRANSIENT and new_dept.id is None:
-            print("SUKCES: Rollback poprawnie wyczyścił ID i przywrócił stan TRANSIENT.")
-
-    # SCENARIUSZ 5: Polimorficzny Miks (Różne klasy w jednym wyniku)
-    print("\n--- Scenariusz 5: Polimorficzny Miks (STI) ---")
-    with Session(engine, builder) as session:
-        # Tabela 'people' zawiera różne klasy
-        session.add(Person(name="Commoner"))
-        session.add(StudentSingle(name="Scholar", grade=5))
-        session.commit()
-        
-    with Session(engine, builder) as session:
-        # Zapytanie o klasę bazową Person powinno zwrócić Person I StudentSingle
-        mixed_results = session.query(Person).all()
-        types = [type(obj).__name__ for obj in mixed_results]
-        print(f"Pobrane typy z tabeli 'people': {types}")
-        if "Person" in types and "StudentSingle" in types:
-            print("SUKCES: Polimorficzne ładowanie poprawnie rozpoznaje różne klasy w jednej tabeli.")
-
-    print("\n--- 4. Test Automatycznego Dirty Checking (Poprawiony) ---")
-    with Session(engine, builder) as session:
-        dept = Department(name="Initial Name")
-        session.add(dept)
-        session.commit() # Tutaj powstaje snapshot: 'Initial Name'
-        
-        dept.name = "New Better Name" # Zmiana tylko w Pythonie
-        
-        session.flush() # TU POWINIEN POJAWIĆ SIĘ SQL UPDATE w logach!
-        
-        # Sprawdzenie fizyczne w bazie
-        res = engine.execute("SELECT name FROM departments WHERE id = ?", (dept.id,))
-        print(f"Nazwa w bazie: {res[0]['name']}")
-
-    print("\n--- Szpiegowski Test Dirty Checkingu ---")
-    with Session(engine, builder) as session:
-        # 1. Tworzymy obiekt
-        dept = Department(name="Initial Name")
-        session.add(dept)
-        session.commit()
-        print(f"Po komicie: ID={dept.id}, Stan={getattr(dept, '_orm_state', None)}")
-
-        # 2. Zmieniamy nazwę - to powinno wyzwolić refresh przez __getattribute__
-        print("\nZmieniam nazwę na 'Marketing'...")
-        dept.name = "Marketing" 
-        
-        # 3. SZPIEGOWANIE: Sprawdzamy co sesja ma w snapshotach
-        pk_val = getattr(dept, dept._mapper.pk)
-        snapshot_key = (dept.__class__, pk_val) # Lub id(dept) jeśli jeszcze nie zmieniłeś klucza
-        
-        # Próbujemy obu wersji klucza, żeby wiedzieć co masz w kodzie
-        snap = session._snapshots.get(snapshot_key) or session._snapshots.get(id(dept))
-        
-        print(f"SNAPSHOT w sesji: {snap}")
-        print(f"AKTUALNY __dict__: {{'name': '{dept.__dict__.get('name')}'}}")
-        
-        if snap and snap.get('name') == dept.__dict__.get('name'):
-            print("!!! ALARM: Snapshot i obiekt są identyczne. Dirty checking nic nie wykryje!")
-        else:
-            print("--- Sukces: Sesja widzi różnicę. Jeśli UPDATE nie pójdzie, winny jest QueryBuilder.")
-
-        # 4. Próba wymuszenia zapisu
-        print("\nWywołuję session.flush()...")
-        session.flush()
-        
-        # 5. Sprawdzenie końcowe w bazie
-        res = engine.execute("SELECT name FROM departments WHERE id = ?", (dept.id,))
-        final_name = res[0]['name'] if res else "BRAK REKORDU"
-        print(f"Finałowa nazwa w bazie: {final_name}")
-        
-        if final_name == "Marketing":
-            print("WYNIK: Test ZALICZONY.")
-        else:
-            print("WYNIK: Test OBLANY. Brak UPDATE w bazie.")
-
-    print("\n" + "="*50)
-    print("URUCHAMIANIE MEGA-DIAGNOSTYKI ORM (10 SCENARIUSZY)")
-    print("="*50)
-
-    # --- SCENARIUSZ 1: DOUBLE LOAD (IDENTITY MAP) ---
-    print("\n[1] Test: Identity Map - Double Load")
-    with Session(engine, builder) as session:
-        d1 = Department(name="IT Core")
-        session.add(d1)
-        session.commit()
-        
-        d2 = session.query(Department).filter(id=d1.id).first()
-        d3 = session.get(Department, d1.id)
-        
-        if d1 is d2 is d3:
-            print("  SUKCES: Tożsamość zachowana (is)")
-        else:
-            print(f"  BŁĄD: Różne instancje dla ID {d1.id}!")
-
-    # --- SCENARIUSZ 2: RESURRECTION (DELETE -> ADD) ---
-    print("\n[2] Test: Zmartwychwstanie (Delete -> Add)")
-    with Session(engine, builder) as session:
-        dept = Department(name="Temporary Dept")
-        session.add(dept)
-        session.commit()
-        
-        session.delete(dept)
-        session.add(dept) # Cofnięcie decyzji o usunięciu
-        session.flush()
-        
-        state = getattr(dept, '_orm_state', None)
-        print(f"  Stan po 're-add': {state}")
-        # Powinien być PERSISTENT, a baza nie powinna dostać DELETE
-
-    # --- SCENARIUSZ 3: AUTO-FK SYNC (CASCADING ADD) ---
-    print("\n[3] Test: Many-To-One Auto-Sync")
-    with Session(engine, builder) as session:
-        new_dept = Department(name="Research")
-        emp = Employee(name="Adam Explorer")
-        emp.department = new_dept # Przypisujemy obiekt, nie ID
-        
-        session.add(emp) # Dodajemy TYLKO dziecko
-        session.commit()
-        
-        if emp.department_id == new_dept.id and new_dept.id is not None:
-            print(f"  SUKCES: FK zsynchronizowany: {emp.department_id}")
-        else:
-            print("  BŁĄD: FK nie został uzupełniony!")
-
-    # --- SCENARIUSZ 4: UPDATE TO NONE (NULL) ---
-    print("\n[4] Test: Update do NULL")
-    with Session(engine, builder) as session:
-        emp = session.query(Employee).first()
-        old_name = emp.name
-        emp.name = None # Ustawiamy NULL
-        session.commit()
-        
-        res = engine.execute("SELECT name FROM employees WHERE id = ?", (emp.id,))
-        if res and res[0]['name'] is None:
-            print(f"  SUKCES: Pole '{old_name}' zmienione na NULL w bazie")
-        else:
-            print("  BŁĄD: Baza nie przyjęła NULL-a")
-
-    # --- SCENARIUSZ 5: SNAPSHOT CLEANUP ---
-    print("\n[5] Test: Snapshot Cleanup po Delete")
-    with Session(engine, builder) as session:
-        d_temp = Department(name="To Delete")
-        session.add(d_temp)
-        session.flush()
-        
-        key = (d_temp.__class__, d_temp.id)
-        exists_before = key in session._snapshots
-        
-        session.delete(d_temp)
-        session.flush()
-        
-        exists_after = key in session._snapshots
-        if exists_before and not exists_after:
-            print("  SUKCES: Snapshot usunięty z pamięci sesji")
-        else:
-            print("  BŁĄD: Wyciek pamięci w snapshotach!")
-
-    # --- SCENARIUSZ 6: PK IMMUTABILITY (SCEPTYCZNY) ---
-    print("\n[6] Test: Próba zmiany Primary Key")
-    with Session(engine, builder) as session:
-        d_pk = Department(name="PK Guard")
-        session.add(d_pk)
-        session.commit()
-        
-        old_id = d_pk.id
-        try:
-            d_pk.id = 9999 # Sabotaż
-            session.flush()
-            # Sprawdzamy czy IM nadal trzyma go pod starym kluczem
-            if session.identity_map.get(Department, old_id) is d_pk:
-                print("  SUKCES: System przetrwał próbę zmiany PK (mapa stabilna)")
-        except Exception as e:
-            print(f"  INFO: System zablokował zmianę PK błędem: {e}")
-
-    # --- SCENARIUSZ 7: MODYFIKACJA PO ROLLBACKU ---
-    print("\n[7] Test: Modyfikacja po Rollbacku")
-    with Session(engine, builder) as session:
-        d_fail = Department(name="Will Fail")
-        session.add(d_fail)
-        session.rollback() # Wszystko wraca do TRANSIENT
-        
-        d_fail.name = "Second Chance"
-        session.add(d_fail)
-        session.commit()
-        if d_fail.id is not None:
-            print(f"  SUKCES: Obiekt uratowany po rollbacku, nowe ID: {d_fail.id}")
-
-    # --- SCENARIUSZ 8: BATCH INSERT (50 OBIEKTÓW) ---
-    print("\n[8] Test: Batch Insert (50 rekordów)")
-    with Session(engine, builder) as session:
-        for i in range(50):
-            session.add(Employee(name=f"Batch Worker {i}"))
-        session.commit()
-        res = engine.execute("SELECT count(*) as cnt FROM employees WHERE name LIKE 'Batch Worker%'")
-        print(f"  Zapisano: {res[0]['cnt']} pracowników")
-
-    # --- SCENARIUSZ 9: RE-ATTACHMENT (DETACHED) ---
-    print("\n[9] Test: Re-attachment (Nowa sesja)")
-    # Sesja A
-    with Session(engine, builder) as s1:
-        d_det = Department(name="Session A")
-        s1.add(d_det)
-        s1.commit()
-    
-    # Sesja B
-    with Session(engine, builder) as s2:
-        d_det.name = "Updated in Session B"
-        s2.add(d_det) # Powinien zostać rozpoznany jako PERSISTENT ze względu na ID
-        s2.commit()
-        
-    res = engine.execute("SELECT name FROM departments WHERE id = ?", (d_det.id,))
-    if res and res[0]['name'] == "Updated in Session B":
-        print("  SUKCES: Obiekt Detached poprawnie zaktualizowany w nowej sesji")
-
-    # --- SCENARIUSZ 10: IDENTITY MAP SPAM (M2M) ---
-    print("\n[10] Test: Many-To-Many Idempotency")
-    with Session(engine, builder) as session:
-        # Ten test sprawdza czy dwukrotny flush nie wstawia duplikatów do tabel M2M
-        # (Wymaga Twojej implementacji _flush_m2m)
-        print("  INFO: Test M2M gotowy do weryfikacji manualnej po logach SQL")
-
-    print("\n" + "="*50)
-    print("DIAGNOSTYKA ZAKOŃCZONA")
-    print("="*50)
-
-
-
-# Simple test classes for inheritance and polymorphism
-class Person(MiniBase):
+# SINGLE
+class PersonSingle(MiniBase):
     id = Number(pk=True)
     name = Text()
-    
-    class Meta:
-        inheritance = "CLASS"
 
-class Student(Person):
+    class Meta:
+        table_name = "people"
+        inheritance = "SINGLE"
+        discriminator = "type"
+        discriminator_value = "PersonSingle"
+
+
+class StudentSingle(PersonSingle):
     grade = Number()
-    person_id = Relationship(Person, r_type="one-to-one")
-    
-    class Meta:
-        inheritance = "CLASS"
 
-class Teacher(Person):
+    class Meta:
+        inheritance = "SINGLE"
+        discriminator_value = "StudentSingle"
+
+
+class TeacherSingle(PersonSingle):
     subject = Text()
-    person_id = Relationship(Person, r_type="one-to-one")
-    
-    class Meta:
-        inheritance = "CLASS"
 
-class School(MiniBase):
+    class Meta:
+        inheritance = "SINGLE"
+        discriminator_value = "TeacherSingle"
+
+
+# CLASS
+class PersonClass(MiniBase):
     id = Number(pk=True)
     name = Text()
-    students = Relationship(Student, backref="school", r_type="one-to-many")
-    teachers = Relationship(Teacher, backref="school", r_type="one-to-many")
 
-def test_inheritance_polymorphism_joins():
-    """Test CLASS inheritance, polymorphic loading, and relationship joins"""
-    engine = DatabaseEngine()
-    builder = QueryBuilder()
-    generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)
-    
-    with Session(engine, builder) as session:
-        print("\n=== TEST: Inheritance, Polymorphism, and Joins ===\n")
-        
-        # Create a school
-        school = School(name="High School")
-        session.add(school)
-        session.commit()
-        print(f"Created: {school.name} (ID: {school.id})")
-        
-        # Create students and teachers
-        student1 = Student(name="Alice", grade=85)
-        student2 = Student(name="Bob", grade=92)
-        teacher1 = Teacher(name="Dr. Smith", subject="Math")
-        teacher2 = Teacher(name="Ms. Jones", subject="English")
-        
-        student1.school = school
-        student2.school = school
-        teacher1.school = school
-        teacher2.school = school
-        
-        session.add(student1)
-        session.add(student2)
-        session.add(teacher1)
-        session.add(teacher2)
-        session.commit()
-        
-        print(f"\nCreated:")
-        print(f"  - {student1.name} (Student, grade: {student1.grade}, ID: {student1.id})")
-        print(f"  - {student2.name} (Student, grade: {student2.grade}, ID: {student2.id})")
-        print(f"  - {teacher1.name} (Teacher, subject: {teacher1.subject}, ID: {teacher1.id})")
-        print(f"  - {teacher2.name} (Teacher, subject: {teacher2.subject}, ID: {teacher2.id})")
-        
-        # Test 1: Polymorphic loading - query Person, get Student and Teacher instances
-        print("\n--- Test 1: Polymorphic Loading (Query Person, get subclasses) ---")
-        all_people = session.query(Person).all()
-        print(f"Found {len(all_people)} people:")
-        for person in all_people:
-            person_type = type(person).__name__
-            if isinstance(person, Student):
-                print(f"  - {person.name} ({person_type}, grade: {person.grade}, ID: {person.id})")
-            elif isinstance(person, Teacher):
-                print(f"  - {person.name} ({person_type}, subject: {person.subject}, ID: {person.id})")
-            else:
-                print(f"  - {person.name} ({person_type}, ID: {person.id})")
-        
-        # Test 2: Direct subclass queries
-        print("\n--- Test 2: Direct Subclass Queries ---")
-        students = session.query(Student).all()
-        print(f"Found {len(students)} students:")
-        for student in students:
-            print(f"  - {student.name} (grade: {student.grade}, ID: {student.id})")
-        
-        teachers = session.query(Teacher).all()
-        print(f"Found {len(teachers)} teachers:")
-        for teacher in teachers:
-            print(f"  - {teacher.name} (subject: {teacher.subject}, ID: {teacher.id})")
-        
-        # Test 3: Relationship joins
-        print("\n--- Test 3: Relationship Joins (Person with School) ---")
-        people_with_school = session.query(Person).join("school").all()
-        print(f"Found {len(people_with_school)} people with school:")
-        for person in people_with_school:
-            school_name = person.school.name if hasattr(person, 'school') and person.school else "None"
-            person_type = type(person).__name__
-            print(f"  - {person.name} ({person_type}) at {school_name}")
-        
-        # Test 4: Update subclass
-        print("\n--- Test 4: Update Subclass ---")
-        student1.grade = 95
-        session.commit()
-        updated = session.query(Student).filter(id=student1.id).first()
-        if updated:
-            print(f"Updated {updated.name}'s grade to {updated.grade}")
-        
-        # Test 5: Filter on subclass
-        print("\n--- Test 5: Filter on Subclass ---")
-        top_students = session.query(Student).filter(grade=92).all()
-        print(f"Top students (grade = 92):")
-        for student in top_students:
-            print(f"  - {student.name} (grade: {student.grade})")
-        
-        print("\n=== All tests completed successfully! ===\n")
+    class Meta:
+        table_name = "persons"
+        inheritance = "CLASS"
+
+
+class StudentClass(PersonClass):
+    grade = Number()
+    person_id = Relationship(PersonClass, r_type="one-to-one")
+
+    class Meta:
+        inheritance = "CLASS"
+
+
+class TeacherClass(PersonClass):
+    subject = Text()
+    person_id = Relationship(PersonClass, r_type="one-to-one")
+
+    class Meta:
+        inheritance = "CLASS"
+
+
+# CONCRETE
+class AnimalConcrete(MiniBase):
+    id = Number(pk=True)
+    name = Text()
+
+    class Meta:
+        table_name = "animals"
+        inheritance = "CONCRETE"
+
+
+class DogConcrete(AnimalConcrete):
+    breed = Text()
+
+    class Meta:
+        inheritance = "CONCRETE"
+
+
+# --- No inheritance (base table only) ---
+class Standalone(MiniBase):
+    id = Number(pk=True)
+    title = Text()
+
+    class Meta:
+        table_name = "standalones"
+
+
+def run_mapper_tests():
+    for cls, mapper in MiniBase._registry.items():
+        name = cls.__name__
+        print_mapper_info(name, mapper)
 
 if __name__ == "__main__":
-    test_inheritance_polymorphism_joins()
+    run_mapper_tests()
