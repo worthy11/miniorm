@@ -10,23 +10,13 @@ class QueryBuilder:
         return f'"{identifier}"'
 
     def build_insert(self, mapper, data):
+        """Build INSERT SQL from mapper and data dict.
+        Data dict should already contain all necessary columns in the correct form
+        (inheritance strategies handle discriminator values).
+        """
         table = self._quote(mapper.table_name)
-        final_data = dict(data)
         
-        inheritance = getattr(mapper, 'inheritance', None)
-        discriminator = getattr(mapper, 'discriminator', 'type')
-        columns = getattr(mapper, 'columns', {})
-        parent = getattr(mapper, 'parent', None)
-        children = getattr(mapper, 'children', [])
-
-        if inheritance and getattr(inheritance.strategy, 'name', None) == "SINGLE":
-             if discriminator in columns:
-                 final_data[discriminator] = getattr(mapper, 'discriminator_value', None)
-        elif not parent and children: 
-             if discriminator in columns:
-                 final_data[discriminator] = getattr(mapper, 'discriminator_value', None)
-
-        fields = list(final_data.keys())
+        fields = list(data.keys())
         quoted_fields = [self._quote(f) for f in fields]
         placeholders = ", ".join(["?" for _ in fields])
         values = [data[f] for f in fields]

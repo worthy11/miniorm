@@ -44,10 +44,14 @@ class Mapper:
                 return
 
     def _resolve_inheritance(self):
-        if not self.parent:
+        # Process inheritance if:
+        # 1. Has parent (child class)
+        # 2. Has explicit inheritance in Meta (root class of inheritance hierarchy)
+        requested = self.meta.get("inheritance")
+        
+        if not self.parent and not requested:
             return
 
-        requested = self.meta.get("inheritance")
         if requested:
             requested = requested.upper()
         else:
@@ -102,13 +106,82 @@ class Mapper:
     def _resolve_relationships(self):
         pass
 
+    def _get_insert_columns(self, entity):
+        
+        from orm_types import Column
+        insert_data = {}
+        
+        for col_name, col_obj in self.columns.items():
+            
+            if col_name == self.pk:
+                pk_value = getattr(entity, col_name, None)
+                
+                if isinstance(pk_value, Column):
+                    pk_value = None
+                if pk_value is not None:
+                    insert_data[col_name] = pk_value
+                continue
+            
+            
+            if col_name == self.discriminator:
+                continue
+            
+           
+            value = getattr(entity, col_name, None)
+            
+            
+            if isinstance(value, Column):
+                value = None
+            
+           
+            if value is not None:
+                insert_data[col_name] = value
+            
+            elif col_obj.nullable:
+                insert_data[col_name] = None
+            
+            elif col_obj.default is not None:
+                insert_data[col_name] = col_obj.default
+        
+        return insert_data
+
     def get(self, id):
         return None
     
     def get_all(self):
         return []
     
-    def insert(self, entity):
+    def prepare_insert(self, entity, query_builder):
+        
+        insert_data = self._get_insert_columns(entity)
+        
+        for col_name, col_obj in self.columns.items():
+            if col_name == self.pk:
+                continue  
+            if col_name == self.discriminator:
+                continue 
+            if col_name not in insert_data and not col_obj.nullable and col_obj.default is None:
+                raise ValueError(
+                    f"Required column '{col_name}' in {self.cls.__name__} has no value. "
+                    f"Set it or mark as nullable."
+                )
+        
+        if self.inheritance and self.inheritance.strategy.name == "SINGLE":
+            insert_data[self.discriminator] = self.discriminator_value
+        
+        sql, params = query_builder.build_insert(self, insert_data)
+        
+       
+        return [(sql, params, {})]
+    
+    def _get_mapper_for_table(self, table_name):
+        """Get the mapper associated with a specific table name."""
+        if self.table_name == table_name:
+            return self
+        
+        if self.parent and self.parent.table_name == table_name:
+            return self.parent
+        
         return None
     
     def update(self, entity):

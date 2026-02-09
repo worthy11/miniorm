@@ -12,10 +12,6 @@ class InheritanceStrategy(ABC):
         pass
     
     @abstractmethod
-    def resolve_insert(self, mapper, data):
-        pass
-    
-    @abstractmethod
     def resolve_update(self, mapper, data, pk_value):
         pass
     
@@ -31,7 +27,8 @@ class SingleTableInheritance(InheritanceStrategy):
     name = "SINGLE"
 
     def resolve_columns(self, mapper):
-        mapper.columns = dict(mapper.parent.columns) | mapper.columns
+        if mapper.parent:
+            mapper.columns = dict(mapper.parent.columns) | mapper.columns
 
     def resolve_table_name(self, mapper):
         root = mapper
@@ -39,9 +36,6 @@ class SingleTableInheritance(InheritanceStrategy):
             root = root.parent
         print(f"Resolved table name for class {mapper.cls.__name__}: {root.table_name}")
         mapper.table_name = root.table_name
-
-    def resolve_insert(self, mapper, data):
-        pass
 
     def resolve_update(self, mapper, data, pk_value):
         pass
@@ -60,9 +54,6 @@ class ClassTableInheritance(InheritanceStrategy):
 
     def resolve_table_name(self, mapper):
         pass
-    
-    def resolve_insert(self, mapper, data):
-        pass
 
     def resolve_update(self, mapper, data, pk_value):
         pass
@@ -77,12 +68,10 @@ class ConcreteTableInheritance(InheritanceStrategy):
     name = "CONCRETE"
 
     def resolve_columns(self, mapper):
-        mapper.columns = dict(mapper.parent.columns) | mapper.columns
+        if mapper.parent:
+            mapper.columns = dict(mapper.parent.columns) | mapper.columns
 
     def resolve_table_name(self, mapper):
-        pass
-
-    def resolve_insert(self, mapper, data):
         pass
 
     def resolve_update(self, mapper, data, pk_value):
