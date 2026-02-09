@@ -1,4 +1,4 @@
-from orm_types import Relationship, ForeignKey, Text, AssociationTable
+from orm_types import Relationship, ForeignKey, Column, Text, AssociationTable
 from inheritance import STRATEGIES, Inheritance
 
 class Mapper:
@@ -185,41 +185,29 @@ class Mapper:
                     raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
 
     def _get_insert_columns(self, entity):
-        
-        from orm_types import Column
         insert_data = {}
-        
         for col_name, col_obj in self.columns.items():
-            
             if col_name == self.pk:
                 pk_value = getattr(entity, col_name, None)
-                
                 if isinstance(pk_value, Column):
                     pk_value = None
                 if pk_value is not None:
                     insert_data[col_name] = pk_value
                 continue
             
-            
             if col_name == self.discriminator:
                 continue
             
-           
             value = getattr(entity, col_name, None)
-            
-            
             if isinstance(value, Column):
                 value = None
             
-           
             if value is not None:
                 insert_data[col_name] = value
-            
-            elif col_obj.nullable:
-                insert_data[col_name] = None
-            
             elif col_obj.default is not None:
                 insert_data[col_name] = col_obj.default
+            elif col_obj.nullable:
+                insert_data[col_name] = None
         
         return insert_data
 
@@ -230,7 +218,6 @@ class Mapper:
         return []
     
     def prepare_insert(self, entity, query_builder):
-        
         insert_data = self._get_insert_columns(entity)
         
         for col_name, col_obj in self.columns.items():
@@ -248,24 +235,12 @@ class Mapper:
             insert_data[self.discriminator] = self.discriminator_value
         
         sql, params = query_builder.build_insert(self, insert_data)
-        
-       
         return [(sql, params, {})]
     
-    def _get_mapper_for_table(self, table_name):
-        """Get the mapper associated with a specific table name."""
-        if self.table_name == table_name:
-            return self
-        
-        if self.parent and self.parent.table_name == table_name:
-            return self.parent
-        
+    def prepare_update(self, entity):
         return None
     
-    def update(self, entity):
-        return None
-    
-    def delete(self, entity):
+    def prepare_delete(self, id):
         return None
     
     def hydrate(self, row_dict):
