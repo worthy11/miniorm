@@ -3,9 +3,12 @@ from states import ObjectState
 from identity_map import IdentityMap
 from query import Query
 from transactions import InsertTransaction, UpdateTransaction, DeleteTransaction
+from mapper import Mapper
 
 class Session:
     def __init__(self, engine, query_builder):
+        Mapper.finalize_mappers()
+        
         self.engine = engine
         self.query_builder = query_builder
         self.identity_map = IdentityMap()
@@ -124,18 +127,19 @@ class Session:
             to_add = current_ids - old_ids
             to_remove = old_ids - current_ids
 
+            assoc = rel.association_table
             for target_id in to_add:
                 sql, params = self.query_builder.build_m2m_insert(
-                    rel.association_table, local_id, target_id,
-                    rel._resolved_local_key, rel._resolved_remote_key
+                    assoc.name, local_id, target_id,
+                    assoc.local_key, assoc.remote_key
                 )
                 try: self.engine.execute(sql, params)
                 except: pass
 
             for target_id in to_remove:
                 sql, params = self.query_builder.build_m2m_delete(
-                    rel.association_table, local_id, target_id,
-                    rel._resolved_local_key, rel._resolved_remote_key
+                    assoc.name, local_id, target_id,
+                    assoc.local_key, assoc.remote_key
                 )
                 self.engine.execute(sql, params)
 

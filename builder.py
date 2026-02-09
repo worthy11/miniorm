@@ -57,25 +57,33 @@ class QueryBuilder:
 
         join_clauses = []
         if joins:
-            for rel in joins:
+            for i, rel in enumerate(joins):
                 target_mapper = rel._resolved_target._mapper
                 target_table = self._quote(target_mapper.table_name)
-                
+                remote_pk_val = target_mapper.pk if isinstance(target_mapper.pk, str) else target_mapper.pk[0]
+                remote_pk = self._quote(remote_pk_val)
+                local_pk_val = mapper.pk if isinstance(mapper.pk, str) else mapper.pk[0]
+                local_pk = self._quote(local_pk_val)
+
                 if rel.r_type == "many-to-one":
                     local_fk = self._quote(rel._resolved_fk_name)
-                    remote_pk_val = target_mapper.pk if isinstance(target_mapper.pk, str) else target_mapper.pk[0]
-                    remote_pk = self._quote(remote_pk_val)
-                    
                     join_clauses.append(
                         f'JOIN {target_table} ON {table}.{local_fk} = {target_table}.{remote_pk}'
                     )
                 elif rel.r_type == "one-to-many":
-                    local_pk_val = mapper.pk if isinstance(mapper.pk, str) else mapper.pk[0]
-                    local_pk = self._quote(local_pk_val)
                     remote_fk = self._quote(rel._resolved_fk_name)
-                    
                     join_clauses.append(
                         f'JOIN {target_table} ON {table}.{local_pk} = {target_table}.{remote_fk}'
+                    )
+                elif rel.r_type == "many-to-many" and rel.association_table:
+                    assoc = rel.association_table
+                    a_alias = f"a{i}"
+                    assoc_table = self._quote(assoc.name)
+                    l_key = self._quote(assoc.local_key)
+                    r_key = self._quote(assoc.remote_key)
+                    join_clauses.append(
+                        f'JOIN {assoc_table} AS {a_alias} ON {table}.{local_pk} = {a_alias}.{l_key} '
+                        f'JOIN {target_table} ON {a_alias}.{r_key} = {target_table}.{remote_pk}'
                     )
 
         sql = f"SELECT {', '.join(cols)} FROM {table}"

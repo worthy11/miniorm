@@ -1,8 +1,8 @@
-from orm_types import Relationship, ForeignKey, Text
+from orm_types import Relationship, ForeignKey, Text, AssociationTable
 from inheritance import STRATEGIES, Inheritance
 
 class Mapper:
-    def __init__(self, cls, columns, meta_attrs):
+    def __init__(self, cls, columns, relationships, meta_attrs):
         self.cls = cls
         self.meta = meta_attrs or {}
         
@@ -17,6 +17,7 @@ class Mapper:
         self.abstract = self.meta.get("abstract", False)
         
         self.parent = None
+        self.declared_relationships = dict(relationships)
         self.relationships = {}
         self.children = []
 
@@ -24,8 +25,6 @@ class Mapper:
         self._resolve_inheritance()
         self._resolve_table_name()
         self._resolve_columns()
-        self._resolve_pk()
-        self._resolve_relationships()
 
     def __repr__(self):
         cols = ", ".join(self.columns.keys())
@@ -62,9 +61,9 @@ class Mapper:
 
         strategy = STRATEGIES[requested]
         discriminator_value = self.meta.get("discriminator_value", self.cls.__name__)
-        
-        from inheritance import Inheritance
+
         self.inheritance = Inheritance(strategy, discriminator_value)
+        self.parent.children.append(self.cls)
     
     def _resolve_table_name(self):
         self.table_name = self.meta.get("table_name", self.cls.__name__+"s")
@@ -73,7 +72,7 @@ class Mapper:
 
     def _resolve_columns(self):
         self.columns = dict(self.declared_columns)
-        
+
         if self.inheritance:
             self.columns = dict(self.declared_columns)
             self.inheritance.strategy.resolve_columns(self)
@@ -98,13 +97,92 @@ class Mapper:
         pk_cols = [name for name, col in self.columns.items() if col.pk]
         if pk_cols:
             self.pk = pk_cols[0]
-        elif self.parent:
-            self.pk = self.parent.pk
         else:
-            raise Exception(f"Klasa {self.cls.__name__} nie ma zdefiniowanego klucza głównego.")
+            raise Exception(f"Class {self.cls.__name__} has no primary key defined")
     
-    def _resolve_relationships(self):
-        pass
+    def _resolve_target_class(self, target):
+        if isinstance(target, type) and hasattr(target, "_mapper"):
+            return target
+        if isinstance(target, str):
+            from base import MiniBase
+            for cls in MiniBase._registry:
+                if getattr(cls, "_mapper", None) and cls._mapper.table_name == target:
+                    return cls
+        return None
+
+    def _apply_relationship(self, name, rel, target_cls, target_mapper):
+        if name in self.relationships:
+            raise ValueError(f"Relationship '{name}' already exists for table {self.table_name}")
+        self.relationships[name] = rel
+        rel._resolved_target = target_cls
+
+        if rel.r_type == "many-to-many":
+            tables = sorted([self.table_name, target_mapper.table_name])
+            table_name = "_".join(tables)
+            local_key = f"{self.table_name.rstrip('s')}_id"
+            remote_key = f"{target_mapper.table_name.rstrip('s')}_id"
+            rel.local_table = self.table_name
+            rel.remote_table = target_mapper.table_name
+
+            rel.association_table = AssociationTable(
+                name=table_name, local_key=local_key, remote_key=remote_key,
+                local_table=self.table_name, remote_table=target_mapper.table_name
+            )
+            rel._resolved_local_key = local_key
+            rel._resolved_remote_key = remote_key
+
+            if getattr(rel, "backref", None) and rel.backref not in target_mapper.relationships:
+                reverse_rel = Relationship(self.table_name, r_type="many-to-many", backref=name)
+                reverse_rel._resolved_target = self.cls
+                reverse_rel.local_table = target_mapper.table_name
+                reverse_rel.remote_table = self.table_name
+
+                reverse_rel.association_table = AssociationTable(
+                    name=table_name, local_key=remote_key, remote_key=local_key,
+                    local_table=target_mapper.table_name, remote_table=self.table_name
+                )
+                reverse_rel._resolved_local_key = remote_key
+                reverse_rel._resolved_remote_key = local_key
+                target_mapper.relationships[rel.backref] = reverse_rel
+        
+        else:
+            rel._resolved_fk_name = name
+            rel.local_table = self.table_name
+            rel.remote_table = target_mapper.table_name
+            self.columns[name] = ForeignKey(target_mapper.table_name, target_mapper.pk, pk=rel.pk, unique=rel.r_type == "one-to-one")
+            if getattr(rel, "backref", None) and rel.r_type == "many-to-one":
+                backref_name = rel.backref
+                if backref_name in target_mapper.relationships:
+                    raise ValueError(f"Backref '{backref_name}' already exists on {target_cls.__name__}")
+                reverse_rel = Relationship(self.table_name, r_type="one-to-many")
+                reverse_rel._resolved_target = self.cls
+                reverse_rel._resolved_fk_name = name
+                reverse_rel.local_table = target_mapper.table_name
+                reverse_rel.remote_table = self.table_name
+                target_mapper.relationships[backref_name] = reverse_rel
+            else:
+                target_mapper.relationships[self.table_name] = rel
+
+    @staticmethod
+    def finalize_mappers():
+        from base import MiniBase
+        for mapper in MiniBase._registry.values():
+            for name, rel in mapper.declared_relationships.items():
+                if name in mapper.relationships:
+                    continue
+                target_cls = mapper._resolve_target_class(rel.target_table)
+                if target_cls is None:
+                    raise ValueError(f"Cannot resolve relationship target: {rel.target_table} (is {mapper.cls.__name__}.{name})")
+                mapper._apply_relationship(name, rel, target_cls, target_cls._mapper)
+        for mapper in MiniBase._registry.values():
+            mapper._resolve_pk()
+        for mapper in MiniBase._registry.values():
+            if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+                if mapper.parent and not any(
+                    getattr(rel, "_resolved_target", None) and getattr(rel._resolved_target, "_mapper", None) and rel._resolved_target._mapper.table_name == mapper.parent.table_name
+                    for rel in mapper.relationships.values()
+                ):
+                    raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
 
     def _get_insert_columns(self, entity):
         

@@ -39,11 +39,11 @@ class SchemaGenerator:
         created_m2m = set()
         for mapper in registry.values():
             for rel in mapper.relationships.values():
-                if rel.r_type == "many-to-many" and rel.association_table not in created_m2m:
+                if rel.r_type == "many-to-many" and rel.association_table and rel.association_table.name not in created_m2m:
                     sql = self.generate_m2m_table(rel)
                     engine.execute(sql)
-                    created_m2m.add(rel.association_table)
-                    print(f"DEBUG: Stworzono tabelę M2M: {rel.association_table}")
+                    created_m2m.add(rel.association_table.name)
+                    print(f"DEBUG: Stworzono tabelę M2M: {rel.association_table.name}")
 
     def _generate_sql(self, table_name, info):
         quoted_table = self._quote(table_name)
@@ -88,18 +88,17 @@ class SchemaGenerator:
         return f"CREATE TABLE IF NOT EXISTS {quoted_table} ({', '.join(column_defs)});"
 
     def generate_m2m_table(self, rel):
-        table = self._quote(rel.association_table)
-        l_key = self._quote(rel._resolved_local_key)
-        r_key = self._quote(rel._resolved_remote_key)
-        
+        assoc = rel.association_table
+        table = self._quote(assoc.name)
+        l_key = self._quote(assoc.local_key)
+        r_key = self._quote(assoc.remote_key)
         target_pk = rel._resolved_target._mapper.pk
         local_pk = rel.local_table_pk if hasattr(rel, 'local_table_pk') else "id"
-
         return f"""
         CREATE TABLE IF NOT EXISTS {table} (
             {l_key} INTEGER,
             {r_key} INTEGER,
-            FOREIGN KEY({l_key}) REFERENCES {self._quote(rel.local_table)}({local_pk}),
-            FOREIGN KEY({r_key}) REFERENCES {self._quote(rel.remote_table)}({target_pk}),
+            FOREIGN KEY({l_key}) REFERENCES {self._quote(assoc.local_table)}({local_pk}),
+            FOREIGN KEY({r_key}) REFERENCES {self._quote(assoc.remote_table)}({target_pk}),
             PRIMARY KEY ({l_key}, {r_key})
         );"""
