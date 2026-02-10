@@ -10,26 +10,16 @@ class QueryBuilder:
         return f'"{identifier}"'
 
     def build_insert(self, mapper, data):
+        """Build INSERT SQL from mapper and data dict.
+        Data dict should already contain all necessary columns in the correct form
+        (inheritance strategies handle discriminator values).
+        """
         table = self._quote(mapper.table_name)
-        final_data = dict(data)
         
-        inheritance = getattr(mapper, 'inheritance', None)
-        discriminator = getattr(mapper, 'discriminator', 'type')
-        columns = getattr(mapper, 'columns', {})
-        parent = getattr(mapper, 'parent', None)
-        children = getattr(mapper, 'children', [])
-
-        if inheritance and getattr(inheritance.strategy, 'name', None) == "SINGLE":
-             if discriminator in columns:
-                 final_data[discriminator] = getattr(mapper, 'discriminator_value', None)
-        elif not parent and children: 
-             if discriminator in columns:
-                 final_data[discriminator] = getattr(mapper, 'discriminator_value', None)
-
-        fields = list(final_data.keys())
+        fields = list(data.keys())
         quoted_fields = [self._quote(f) for f in fields]
         placeholders = ", ".join(["?" for _ in fields])
-        values = [final_data[f] for f in fields]
+        values = [data[f] for f in fields]
         
         sql = f"INSERT INTO {table} ({', '.join(quoted_fields)}) VALUES ({placeholders})"
         return sql, tuple(values)
@@ -67,25 +57,33 @@ class QueryBuilder:
 
         join_clauses = []
         if joins:
-            for rel in joins:
+            for i, rel in enumerate(joins):
                 target_mapper = rel._resolved_target._mapper
                 target_table = self._quote(target_mapper.table_name)
-                
+                remote_pk_val = target_mapper.pk if isinstance(target_mapper.pk, str) else target_mapper.pk[0]
+                remote_pk = self._quote(remote_pk_val)
+                local_pk_val = mapper.pk if isinstance(mapper.pk, str) else mapper.pk[0]
+                local_pk = self._quote(local_pk_val)
+
                 if rel.r_type == "many-to-one":
                     local_fk = self._quote(rel._resolved_fk_name)
-                    remote_pk_val = target_mapper.pk if isinstance(target_mapper.pk, str) else target_mapper.pk[0]
-                    remote_pk = self._quote(remote_pk_val)
-                    
                     join_clauses.append(
                         f'JOIN {target_table} ON {table}.{local_fk} = {target_table}.{remote_pk}'
                     )
                 elif rel.r_type == "one-to-many":
-                    local_pk_val = mapper.pk if isinstance(mapper.pk, str) else mapper.pk[0]
-                    local_pk = self._quote(local_pk_val)
                     remote_fk = self._quote(rel._resolved_fk_name)
-                    
                     join_clauses.append(
                         f'JOIN {target_table} ON {table}.{local_pk} = {target_table}.{remote_fk}'
+                    )
+                elif rel.r_type == "many-to-many" and rel.association_table:
+                    assoc = rel.association_table
+                    a_alias = f"a{i}"
+                    assoc_table = self._quote(assoc.name)
+                    l_key = self._quote(assoc.local_key)
+                    r_key = self._quote(assoc.remote_key)
+                    join_clauses.append(
+                        f'JOIN {assoc_table} AS {a_alias} ON {table}.{local_pk} = {a_alias}.{l_key} '
+                        f'JOIN {target_table} ON {a_alias}.{r_key} = {target_table}.{remote_pk}'
                     )
 
         sql = f"SELECT {', '.join(cols)} FROM {table}"
@@ -103,7 +101,8 @@ class QueryBuilder:
         if join_clauses:
             sql += " " + " ".join(join_clauses)
             
-        if actual_filters:
+        params = []
+        if filters:
             where_parts = []
             for col, val in actual_filters.items():
                 quoted_col = f"{table}.{self._quote(col)}"

@@ -18,10 +18,6 @@ class Query:
         self._limit = value
         return self
     
-    def offset(self, value: int):
-        self._offset = value
-        return self
-
     def all(self):
         if hasattr(self.session, '_autoflush'):
             self.session._autoflush()
@@ -31,7 +27,8 @@ class Query:
         )
         
         rows = self.session.engine.execute(sql, params)
-        # Get column names - sqlite3.Row objects have keys() method
+        
+        # Get column names from SQL result
         if rows and hasattr(rows[0], 'keys'):
             # sqlite3.Row objects
             column_names = list(rows[0].keys()) if rows else list(mapper.columns.keys())
@@ -39,31 +36,9 @@ class Query:
             # Fallback to mapper columns
             column_names = list(mapper.columns.keys())
         
-        # Build mapping for CLASS inheritance subclass detection
-        subclass_fk_mapping = {}
-        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS" and not mapper.parent:
-            for subclass_mapper in mapper.children:
-                # Find FK column in subclass
-                from orm_types import ForeignKey
-                fk_col = None
-                # Get local columns (columns not in parent) for CLASS inheritance
-                parent_cols = set(subclass_mapper.parent.columns.keys()) if subclass_mapper.parent else set()
-                for col_name, col in subclass_mapper.columns.items():
-                    if col_name in parent_cols:
-                        continue  # Skip inherited columns
-                    if isinstance(col, ForeignKey) and col.target_table == mapper.table_name:
-                        fk_col = col_name
-                        break
-                if fk_col is None:
-                    fk_col = f"{mapper.table_name.rstrip('s')}_id"
-                subclass_fk_mapping[subclass_mapper.table_name] = {
-                    'fk_col': fk_col,
-                    'mapper': subclass_mapper
-                }
-        
         results = []
         for row in rows:
-            # Handle sqlite3.Row objects (they're dict-like)
+            # Convert row to dict for mapper.hydrate()
             if hasattr(row, 'keys'):
                 row_dict = dict(row)
             else:
@@ -72,40 +47,28 @@ class Query:
             # Check identity map BEFORE hydrating to avoid unnecessary work
             pk_val = row_dict.get(mapper.pk)
             if pk_val is not None:
-                existing = self.session.identity_map.get(self.model_class, pk_val)
-                if existing:
-                    # Object already in identity map - check if deleted
-                    if getattr(existing, '_orm_state', None) == ObjectState.DELETED:
-                        # Object is deleted in this session - skip it (Unit of Work behavior)
-                        continue
-                    # Return existing instance (identity map pattern - same PK = same instance)
-                    results.append(existing)
-                    continue
+                # Note: We can't check identity map here because mapper.hydrate() might
+                # return a different class (polymorphism), so we check after hydration
+                pass
             
-            # For CLASS inheritance, determine which subclass to instantiate
-            target_class = self.model_class
-            if subclass_fk_mapping:
-                # Check which subclass table has a non-null FK (indicating it's that subclass)
-                # The FK column from subclass table will be in the row_dict with alias {table}_{column}
-                for subclass_table, info in subclass_fk_mapping.items():
-                    fk_col = info['fk_col']
-                    # The FK column is selected with alias: {subclass_table}_{fk_col}
-                    alias_key = f"{info['mapper'].table_name}_{fk_col}"
-                    # Also try just the column name (in case it's not aliased)
-                    fk_value = row_dict.get(alias_key) or row_dict.get(fk_col)
-                    if fk_value is not None:
-                        # This is the subclass - the FK exists, so this Person is actually a Vet/Owner
-                        target_class = info['mapper'].cls
-                        break
-            
-            # Hydrate object (just creates and populates, no state management)
-            obj = mapper.hydrate(row_dict, base_class=target_class)
+            # Use mapper's hydrate method (handles polymorphism automatically)
+            obj = mapper.hydrate(row_dict)
             
             if obj:
+                # Check identity map after hydration (now we know the correct class)
+                pk_val = getattr(obj, mapper.pk, None)
+                if pk_val is not None:
+                    existing = self.session.identity_map.get(obj.__class__, pk_val)
+                    if existing:
+                        if getattr(existing, '_orm_state', None) == ObjectState.DELETED:
+                            continue
+                        results.append(existing)
+                        continue
+                
                 # Session handles making object persistent
                 obj = self.session._make_persistent(obj)
-                if obj:
-                    results.append(obj)
+            if obj and getattr(obj, '_orm_state', None) != ObjectState.DELETED:
+                results.append(obj)
                 
         return results
 
@@ -162,3 +125,5 @@ class Query:
         
         self._results = results
         return self
+
+    

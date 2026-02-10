@@ -16,7 +16,7 @@ class DatabaseEngine:
             msg += f" | [PARAMS]: {params}"
         self.logger.info(msg)
 
-    def execute(self, sql, params=None):
+    def execute(self, sql, params=None, return_lastrowid=False):
         clean_params = []
         if params:
             for p in params:
@@ -25,17 +25,13 @@ class DatabaseEngine:
                 else:
                     clean_params.append(p)
 
-        self._log(sql, clean_params)
+        self._log(sql, clean_params if clean_params else params)
         cursor = self.connection.cursor()
-        cursor.execute(sql, tuple(clean_params))
+        cursor.execute(sql, tuple(clean_params) if clean_params else (params or ()))
+        
+        if return_lastrowid:
+            return cursor.lastrowid
         return cursor.fetchall()
-
-
-    def execute_insert(self, sql, params=None):
-        self._log(sql, params)
-        cursor = self.connection.cursor()
-        cursor.execute(sql, params or ())
-        return cursor.lastrowid
 
     def commit(self):
         self.connection.commit()

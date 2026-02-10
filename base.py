@@ -1,5 +1,5 @@
 from mapper import Mapper
-from orm_types import Column
+from orm_types import Column, Relationship
 from states import ObjectState
 
 class MiniBase:
@@ -21,9 +21,15 @@ class MiniBase:
         super().__init_subclass__(**kwargs)
 
         columns = {
-            name: dtype
-            for name, dtype in cls.__dict__.items()
-            if isinstance(dtype, Column)
+            name: col
+            for name, col in cls.__dict__.items()
+            if isinstance(col, Column)
+        }
+
+        relationships = {
+            name: rel
+            for name, rel in cls.__dict__.items()
+            if isinstance(rel, Relationship)
         }
 
         meta_cls = getattr(cls, "Meta", None)
@@ -33,7 +39,7 @@ class MiniBase:
                 if not attr.startswith('_'):
                     meta_attrs[attr] = getattr(meta_cls, attr)
         
-        cls._mapper = Mapper(cls, columns, meta_attrs)
+        cls._mapper = Mapper(cls, columns, relationships, meta_attrs)
         MiniBase._registry[cls] = cls._mapper
 
     def __getattribute__(self, name):
@@ -64,7 +70,7 @@ class MiniBase:
 
         return val
 
-    def _load_relationship(self, session, rel):   #To do
+    def _load_relationship(self, session, rel):
         target_cls = rel._resolved_target
         if not target_cls:
             return None
@@ -79,11 +85,9 @@ class MiniBase:
             return session.query(target_cls).filter(**{fk_name: pk_val}).all()
 
         if rel.r_type == "many-to-many":
+            assoc = rel.association_table
             return session.query(target_cls).join_m2m(
-                rel.association_table, 
-                rel._resolved_local_key, 
-                rel._resolved_remote_key, 
-                self.id
+                assoc.name, assoc.local_key, assoc.remote_key, self.id
             ).all()
         return None
     
