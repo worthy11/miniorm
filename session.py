@@ -3,9 +3,12 @@ from states import ObjectState
 from identity_map import IdentityMap
 from query import Query
 from transactions import InsertTransaction, UpdateTransaction, DeleteTransaction
+from mapper import Mapper
 
 class Session:
     def __init__(self, engine, query_builder):
+        Mapper.finalize_mappers()
+        
         self.engine = engine
         self.query_builder = query_builder
         self.identity_map = IdentityMap()
@@ -52,17 +55,51 @@ class Session:
                 self.unit_of_work.append(UpdateTransaction(self, obj))
 
         if not self.unit_of_work:
+            self._in_flush = False
             return
 
         try:
             while self.unit_of_work:
                 transaction = self.unit_of_work.popleft()
-                transaction.execute()
+                operations = transaction.prepare()
+                
+                # Handle both single operation and list of operations
+                if not isinstance(operations, list):
+                    operations = [operations]
+                
+                previous_id = None
+                for i, op in enumerate(operations):
+                    sql, params, apply_side_effects, rebuild_fn = op
+                    
+                    # Rebuild SQL if needed (for FK updates in CLASS inheritance)
+                    if rebuild_fn and previous_id is not None:
+                        new_sql, new_params = rebuild_fn(previous_id)
+                        if new_sql:
+                            sql, params = new_sql, new_params
+                    
+                    # Skip if no SQL to execute (e.g., update with no changes)
+                    if sql is None:
+                        continue
+                    
+                    # Execute SQL via engine
+                    from transactions import InsertTransaction
+                    if isinstance(transaction, InsertTransaction):
+                        result = self.engine.execute(sql, params, return_lastrowid=True)
+                        # Apply side effects before next operation (for FK propagation)
+                        if apply_side_effects:
+                            apply_side_effects(result, previous_id)
+                        previous_id = result
+                    else:
+                        self.engine.execute(sql, params)
+                        result = None
+                        # Apply side effects after execution
+                        if apply_side_effects:
+                            apply_side_effects(result, previous_id)
         except Exception as e:
             self.rollback()
             raise RuntimeError(f"Błąd podczas flush: {e}")
         finally:
-            self._in_flush=False
+            self._in_flush = False
 
     def _flush_m2m(self, instance):
         mapper = instance._mapper
@@ -90,18 +127,19 @@ class Session:
             to_add = current_ids - old_ids
             to_remove = old_ids - current_ids
 
+            assoc = rel.association_table
             for target_id in to_add:
                 sql, params = self.query_builder.build_m2m_insert(
-                    rel.association_table, local_id, target_id,
-                    rel._resolved_local_key, rel._resolved_remote_key
+                    assoc.name, local_id, target_id,
+                    assoc.local_key, assoc.remote_key
                 )
                 try: self.engine.execute(sql, params)
                 except: pass
 
             for target_id in to_remove:
                 sql, params = self.query_builder.build_m2m_delete(
-                    rel.association_table, local_id, target_id,
-                    rel._resolved_local_key, rel._resolved_remote_key
+                    assoc.name, local_id, target_id,
+                    assoc.local_key, assoc.remote_key
                 )
                 self.engine.execute(sql, params)
 
