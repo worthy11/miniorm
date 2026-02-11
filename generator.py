@@ -1,4 +1,5 @@
 import re
+from orm_types import ForeignKey
 
 class SchemaGenerator:
     TYPE_MAP = {str: "TEXT", int: "INTEGER", bool: "INTEGER"}
@@ -12,6 +13,8 @@ class SchemaGenerator:
         return f'"{identifier}"'
     
     def create_all(self, engine, registry):
+        from mapper import Mapper
+        Mapper.finalize_mappers()
         table_definitions = {}
         
         for mapper in registry.values():
@@ -19,17 +22,11 @@ class SchemaGenerator:
             if name not in table_definitions:
                 table_definitions[name] = {
                     'columns': {},
-                    'fks': [],
                     'pk': mapper.pk,
-                    'discriminator': mapper.discriminator
+                    'mapper': mapper
                 }
             
             table_definitions[name]['columns'].update(mapper.columns)
-            
-            parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
-            for col_name, col in mapper.columns.items():
-                if col_name not in parent_cols and hasattr(col, 'is_foreign_key'):
-                    table_definitions[name]['fks'].append((col_name, col))
 
         for t_name, info in table_definitions.items():
             sql = self._generate_sql(t_name, info)
@@ -39,47 +36,45 @@ class SchemaGenerator:
         created_m2m = set()
         for mapper in registry.values():
             for rel in mapper.relationships.values():
-                if rel.r_type == "many-to-many" and rel.association_table and rel.association_table.name not in created_m2m:
-                    sql = self.generate_m2m_table(rel)
-                    engine.execute(sql)
-                    created_m2m.add(rel.association_table.name)
-                    print(f"DEBUG: Stworzono tabelę M2M: {rel.association_table.name}")
+                if rel.r_type == "many-to-many" and rel.association_table:
+                    assoc = rel.association_table
+                    if assoc.name not in created_m2m:
+                        sql = self.generate_m2m_table(rel)
+                        engine.execute(sql)
+                        created_m2m.add(assoc.name)
+                        print(f"DEBUG: Stworzono tabelę M2M: {assoc.name}")
+
 
     def _generate_sql(self, table_name, info):
         quoted_table = self._quote(table_name)
         column_defs = []
-
-        # For CONCRETE inheritance, include ALL columns (parent + local) in each table
-        # For CLASS inheritance, include only local columns (parent has its own table)
-        # For SINGLE inheritance, include all columns (shared table)
-        if mapper.inheritance and mapper.inheritance.strategy.name == "CONCRETE":
-            # CONCRETE: Each table gets all columns (duplicated from parent)
-            columns_to_include = mapper.columns
-        elif mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
-            # CLASS: Only local columns (parent has separate table)
-            columns_to_include = mapper.local_columns
+        mapper = info['mapper']
+        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+            parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
+            columns_to_include = {
+                name: col for name, col in mapper.columns.items() 
+                if name not in parent_cols or name == mapper.pk
+            }
         else:
-            # SINGLE or no inheritance: all columns
-            columns_to_include = mapper.columns
+            columns_to_include = info['columns']
 
         for name, col in columns_to_include.items():
             q_name = self._quote(name)
             sql_type = self.TYPE_MAP.get(col.dtype, "TEXT")
             constraints = []
-            if name == info['pk']:
-                constraints.append("PRIMARY KEY AUTOINCREMENT")
+            
+            if name == mapper.pk:
+                if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS" and mapper.parent:
+                    constraints.append("PRIMARY KEY")
+                else:
+                    constraints.append("PRIMARY KEY AUTOINCREMENT")
+            
             if not col.nullable:
                 constraints.append("NOT NULL")
             column_defs.append(f"{q_name} {sql_type} {' '.join(constraints)}".strip())
 
-        # Add foreign key constraints for local columns only (not inherited ones)
-        parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
         for name, col in columns_to_include.items():
-            # Skip inherited columns for FK constraints (they're in parent table for CLASS)
-            if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
-                if name in parent_cols:
-                    continue
-            if hasattr(col, 'is_foreign_key') and col.is_foreign_key:
+            if hasattr(col, 'target_table'):
                 column_defs.append(
                     f"FOREIGN KEY({self._quote(name)}) REFERENCES "
                     f"{self._quote(col.target_table)}({self._quote(col.target_column)})"

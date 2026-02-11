@@ -43,25 +43,39 @@ class MiniBase:
         MiniBase._registry[cls] = cls._mapper
 
     def __getattribute__(self, name):
-        if name.startswith('_') or name == 'mapper_args':
+        if name.startswith('_') or name == 'mapper_args' or name == 'Meta':
             return object.__getattribute__(self, name)
-        
+
         state = object.__getattribute__(self, '_orm_state')
+        mapper = object.__getattribute__(self, '_mapper')
         session = object.__getattribute__(self, '_session')
 
+        if name == mapper.pk:
+            return object.__getattribute__(self, name)
+        
+        if state == ObjectState.TRANSIENT:
+            return object.__getattribute__(self, name)
+
         if state == ObjectState.EXPIRED and session:
-            session.refresh(self)
+            object.__setattr__(self, '_orm_state', ObjectState.PERSISTENT)
+            try:
+                session.refresh(self)
+            except Exception:
+                object.__setattr__(self, '_orm_state', ObjectState.EXPIRED)
+                raise
 
-        mapper = object.__getattribute__(self, '_mapper')
         if name in mapper.relationships:
-            if name in self.__dict__:
-                return self.__dict__[name]
-
-            if session:
-                rel = mapper.relationships[name]
-                value = self._load_relationship(session, rel)
-                object.__setattr__(self, name, value)
-                return value
+            current_val = self.__dict__.get(name)
+            
+            is_loaded_object = (current_val is not None and 
+                                hasattr(current_val, '_orm_state'))
+            
+            if not is_loaded_object:
+                if session:
+                    rel = mapper.relationships[name]
+                    value = self._load_relationship(session, rel)
+                    object.__setattr__(self, name, value)
+                    return value
 
         val = object.__getattribute__(self, name)
 
@@ -75,20 +89,30 @@ class MiniBase:
         if not target_cls:
             return None
 
-        if rel.r_type == "many-to-one":
-            fk_val = getattr(self, rel._resolved_fk_name, None)
-            return session.get(target_cls, fk_val) if fk_val else None
+        session._internal_loading = True
+        try:
+            if rel.r_type == "many-to-one":
+                fk_val = object.__getattribute__(self, rel._resolved_fk_name)
+                from orm_types import Column
+                if isinstance(fk_val, Column) or fk_val is None:
+                    return None
+                return session.get(target_cls, fk_val)
+            
+            pk_val = object.__getattribute__(self, self._mapper.pk)
+            from orm_types import Column
+            if isinstance(pk_val, Column) or pk_val is None:
+                return [] if rel.r_type in ("one-to-many", "many-to-many") else None
 
-        if rel.r_type == "one-to-many":
-            fk_name = str(rel._resolved_fk_name) 
-            pk_val = getattr(self, self._mapper.pk)
-            return session.query(target_cls).filter(**{fk_name: pk_val}).all()
+            if rel.r_type == "one-to-many":
+                return session.query(target_cls).filter(**{rel._resolved_fk_name: pk_val}).all()
 
-        if rel.r_type == "many-to-many":
-            assoc = rel.association_table
-            return session.query(target_cls).join_m2m(
-                assoc.name, assoc.local_key, assoc.remote_key, self.id
-            ).all()
+            if rel.r_type == "many-to-many":
+                assoc = rel.association_table
+                return session.query(target_cls).join_m2m(
+                    assoc.name, assoc.local_key, assoc.remote_key, pk_val
+                ).all()
+        finally:
+            session._internal_loading = False
         return None
     
     def __setattr__(self, name, value):

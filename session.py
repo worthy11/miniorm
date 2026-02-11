@@ -15,6 +15,7 @@ class Session:
         self.unit_of_work = deque() 
         self._snapshots = {}
         self._in_flush = False
+        self._is_loading = False
 
     def query(self, model_class):
         self._autoflush()
@@ -26,7 +27,16 @@ class Session:
         return self.query(model_class).filter(**{model_class._mapper.pk: pk}).first()
 
     def add(self, entity):
-        if getattr(entity, '_orm_state', None) == ObjectState.TRANSIENT:
+        state = getattr(entity, '_orm_state', None)
+        if state == ObjectState.DETACHED:
+            object.__setattr__(entity, '_session', self)
+            object.__setattr__(entity, '_orm_state', ObjectState.PERSISTENT)
+            pk_val = object.__getattribute__(entity, entity._mapper.pk)
+            if pk_val:
+                self.identity_map.add(entity.__class__, pk_val, entity)
+            return
+
+        if state == ObjectState.TRANSIENT:
             object.__setattr__(entity, '_orm_state', ObjectState.PENDING)
             object.__setattr__(entity, '_session', self)
             
@@ -35,11 +45,14 @@ class Session:
             self.unit_of_work.append(InsertTransaction(self, entity))
 
     def update(self, entity):
-        if getattr(entity, '_orm_state', None) == ObjectState.PERSISTENT:
-             self.unit_of_work.append(UpdateTransaction(self, entity))
+        state = getattr(entity, '_orm_state', None)
+        if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
+            if not any(t.entity is entity and isinstance(t, UpdateTransaction) for t in self.unit_of_work):
+                self.unit_of_work.append(UpdateTransaction(self, entity))
 
     def delete(self, entity):
-        if getattr(entity, '_orm_state', None) == ObjectState.PERSISTENT:
+        state = getattr(entity, '_orm_state', None)
+        if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
             object.__setattr__(entity, '_orm_state', ObjectState.DELETED)
             self.unit_of_work.append(DeleteTransaction(self, entity))
 
@@ -48,6 +61,7 @@ class Session:
             return
             
         self._in_flush = True
+        
         dirty_objects = self._get_dirty_objects()
         for obj in dirty_objects:
             is_queued = any(t.entity is obj and isinstance(t, UpdateTransaction) for t in self.unit_of_work)
@@ -58,48 +72,52 @@ class Session:
             self._in_flush = False
             return
 
+        self.unit_of_work = self._sort_unit_of_work()
+
         try:
+            self.engine.execute("BEGIN TRANSACTION")
+
             while self.unit_of_work:
                 transaction = self.unit_of_work.popleft()
                 operations = transaction.prepare()
                 
-                # Handle both single operation and list of operations
                 if not isinstance(operations, list):
                     operations = [operations]
                 
-                previous_id = None
-                for i, op in enumerate(operations):
+                current_id = None
+                for op in operations:
                     sql, params, apply_side_effects, rebuild_fn = op
                     
-                    # Rebuild SQL if needed (for FK updates in CLASS inheritance)
-                    if rebuild_fn and previous_id is not None:
-                        new_sql, new_params = rebuild_fn(previous_id)
-                        if new_sql:
-                            sql, params = new_sql, new_params
+                    if rebuild_fn and current_id is not None:
+                        sql, params = rebuild_fn(current_id)
                     
-                    # Skip if no SQL to execute (e.g., update with no changes)
                     if sql is None:
                         continue
                     
-                    # Execute SQL via engine
                     from transactions import InsertTransaction
                     if isinstance(transaction, InsertTransaction):
                         result = self.engine.execute(sql, params, return_lastrowid=True)
-                        # Apply side effects before next operation (for FK propagation)
                         if apply_side_effects:
-                            apply_side_effects(result, previous_id)
-                        previous_id = result
+                            apply_side_effects(result, current_id)
+                        current_id = result
                     else:
                         self.engine.execute(sql, params)
-                        result = None
-                        # Apply side effects after execution
                         if apply_side_effects:
-                            apply_side_effects(result, previous_id)
+                            apply_side_effects(None, None)
+
+                from transactions import DeleteTransaction
+                if not isinstance(transaction, DeleteTransaction):
+                    self._flush_m2m(transaction.entity)
+
+            self.engine.execute("COMMIT")
+
         except Exception as e:
+            self.engine.execute("ROLLBACK")
             self.rollback()
             raise RuntimeError(f"Błąd podczas flush: {e}")
         finally:
             self._in_flush = False
+    
 
     def _flush_m2m(self, instance):
         mapper = instance._mapper
@@ -176,6 +194,34 @@ class Session:
         
         return obj
 
+
+    def _sort_unit_of_work(self):
+        from transactions import InsertTransaction
+        
+        inserts = [t for t in self.unit_of_work if isinstance(t, InsertTransaction)]
+        others = [t for t in self.unit_of_work if not isinstance(t, InsertTransaction)]
+        
+        sorted_inserts = []
+        visited = set()
+
+        def visit(trans):
+            if trans in visited: return
+            visited.add(trans)
+            
+            mapper = trans.entity._mapper
+            for rel_name, rel in mapper.relationships.items():
+                if rel.r_type == "many-to-one":
+                    related_obj = getattr(trans.entity, rel_name, None)
+                    if related_obj:
+                        dep = next((t for t in inserts if t.entity is related_obj), None)
+                        if dep: visit(dep)
+            sorted_inserts.append(trans)
+
+        for t in inserts:
+            visit(t)
+            
+        return deque(sorted_inserts + others)
+
     def _get_dirty_objects(self):
         dirty = []
         for obj in self.identity_map._map.values():
@@ -187,18 +233,22 @@ class Session:
             is_dirty = False
             for col in obj._mapper.columns:
                 if col == obj._mapper.pk: continue
-                if getattr(obj, col, None) != old_state.get(col):
+                current_val = obj.__dict__.get(col)
+                if current_val != old_state.get(col):
                     is_dirty = True
                     break
             
             if not is_dirty:
                 for name, rel in obj._mapper.relationships.items():
-                    if rel.r_type == "many-to-many" and name in obj.__dict__:
-                        current_ids = set(o.id for o in getattr(obj, name, []) if hasattr(o, 'id'))
-                        old_ids = set(old_state.get(name, []))
-                        if current_ids != old_ids:
-                            is_dirty = True
-                            break
+                    if rel.r_type == "many-to-many":
+                        current_collection = obj.__dict__.get(name)
+                        
+                        if isinstance(current_collection, list):
+                            current_ids = set(o.id for o in current_collection if hasattr(o, 'id'))
+                            old_ids = set(old_state.get(name, []))
+                            if current_ids != old_ids:
+                                is_dirty = True
+                                break
             
             if is_dirty: dirty.append(obj)
         return dirty
@@ -206,41 +256,86 @@ class Session:
     def commit(self):
         self.flush()
         self.engine.commit()
-        for obj in self.identity_map._map.values():
+        for obj in list(self.identity_map._map.values()):
             if getattr(obj, '_orm_state', None) == ObjectState.PERSISTENT:
                 self._take_snapshot(obj)
+                object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
 
     def rollback(self):
         self.engine.rollback()
+        
+        # 2. Sprzątanie obiektów w pamięci
+        for transaction in self.unit_of_work:
+            entity = transaction.entity
+            
+            # Jeśli to był INSERT, Edek musi stać się znów 'nowy' (bez ID)
+            if isinstance(transaction, InsertTransaction):
+                # Używamy object.__setattr__, żeby ominąć magię __setattr__ (jeśli ją masz)
+                object.__setattr__(entity, self.mapper.pk, None)
+                object.__setattr__(entity, '_orm_state', ObjectState.TRANSIENT)
+                object.__setattr__(entity, '_session', self)
+            
+            # Jeśli to był UPDATE lub DELETE, obiekt wciąż żyje w bazie w starej wersji
+            elif isinstance(transaction, (UpdateTransaction, DeleteTransaction)):
+                object.__setattr__(entity, '_orm_state', ObjectState.PERSISTENT)
+
+        # 3. Czyszczenie struktur sesji
         self.unit_of_work.clear()
-        self.identity_map.clear()
+        self.identity_map.clear()  # Najbezpieczniejszy ruch - po błędzie nie ufamy mapie
         self._snapshots.clear()
+        
+        print("DEBUG: Sprzątanie po rollbacku zakończone. Obiekty zresetowane.")
         
     def _cascade_add(self, instance):
         mapper = instance._mapper
-        for rel_name, rel in mapper.relationships.items():
-            if rel_name in instance.__dict__:
-                val = instance.__dict__[rel_name]
-                if isinstance(val, list):
-                    for child in val: self.add(child)
-                elif val:
-                    self.add(val)
+        for rel_name in mapper.relationships:
+            val = getattr(instance, rel_name, None)
+            if not val:
+                continue
+                
+            items = val if isinstance(val, list) else [val]
+            for item in items:
+                if hasattr(item, '_mapper') and getattr(item, '_orm_state', None) == ObjectState.TRANSIENT:
+                    self.add(item)
 
     def _autoflush(self):
+        if self._is_loading:
+            return
         if self.unit_of_work or self._get_dirty_objects():
             self.flush()
             
     def refresh(self, instance):
-        pk = getattr(instance, instance._mapper.pk)
-        fresh = self.query(type(instance)).filter(**{instance._mapper.pk: pk}).first()
+        mapper = instance._mapper
+        pk_name = mapper.pk
+        pk_val = instance.__dict__.get(pk_name)
+        
+        if pk_val is None:
+            return
+
+        fresh = self.query(type(instance)).filter(**{pk_name: pk_val}).first()
+        
         if fresh:
-            for col in instance._mapper.columns:
-                setattr(instance, col, getattr(fresh, col))
+            for col in mapper.columns:
+                val = fresh.__dict__.get(col)
+                instance.__dict__[col] = val
+            
             object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
             self._take_snapshot(instance)
 
     def close(self):
+        
+        all_tracked_objects = list(self.identity_map._map.values())
+        
+        for obj in all_tracked_objects:
+            object.__setattr__(obj, '_session', None)
+            object.__setattr__(obj, '_orm_state', ObjectState.DETACHED)
+        
         self.rollback()
+        self.identity_map.clear()
+        self._snapshots.clear()
+        self.unit_of_work.clear()
+        
+        print(f"DEBUG: Odpięto {len(all_tracked_objects)} obiektów.")
     
     def __enter__(self): return self
     def __exit__(self, exc_type, exc_val, exc_tb):

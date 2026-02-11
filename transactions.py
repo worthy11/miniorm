@@ -41,10 +41,12 @@ class InsertTransaction(Transaction):
             
             def make_callback(is_last):
                 def apply_side_effects(new_id, previous_id):
-                    # Only apply final side effects on last operation
+                    final_id = new_id if new_id is not None else previous_id
+                    
                     if is_last:
-                        setattr(self.entity, self.mapper.pk, new_id)
-                        self.session.identity_map.add(self.entity.__class__, new_id, self.entity)
+                        object.__setattr__(self.entity, self.mapper.pk, final_id)
+                        
+                        self.session.identity_map.add(self.entity.__class__, final_id, self.entity)
                         
                         from states import ObjectState
                         object.__setattr__(self.entity, '_orm_state', ObjectState.PERSISTENT)
@@ -91,10 +93,21 @@ class DeleteTransaction(Transaction):
         results = []
         pk_val = getattr(self.entity, self.mapper.pk)
         
-        for sql, params, op_meta in operations:
-            def apply_side_effects(result, previous_id):
-                self.session.identity_map.remove(self.entity.__class__, pk_val)
+        for i, (sql, params, op_meta) in enumerate(operations):
+            is_last = (i == len(operations) - 1)
+            
+            def apply_side_effects(result, previous_id, final_step=is_last):
+                if final_step:
+                    self.session.identity_map.remove(self.entity.__class__, pk_val)
+                    
+                    if id(self.entity) in self.session._snapshots:
+                        del self.session._snapshots[id(self.entity)]
+                    
+                    from states import ObjectState
+                    object.__setattr__(self.entity, '_orm_state', ObjectState.DELETED)
             
             results.append((sql, params, apply_side_effects, None))
         
-        return results if len(results) > 1 else results[0] if results else (None, None, None, None)
+        if not results:
+            return (None, None, None, None)
+        return results if len(results) > 1 else results[0]

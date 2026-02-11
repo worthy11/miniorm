@@ -1,5 +1,6 @@
 from base import MiniBase
 from orm_types import Text, Number, Relationship
+from test_utils import run_mapper_tests
 
 
 # SINGLE
@@ -41,7 +42,7 @@ class PersonClass(MiniBase):
 
 class StudentClass(PersonClass):
     grade = Number()
-    person_id = Relationship(PersonClass, r_type="one-to-one")
+    person_id = Relationship(PersonClass, r_type="one-to-one", pk=True)
 
     class Meta:
         inheritance = "CLASS"
@@ -49,7 +50,7 @@ class StudentClass(PersonClass):
 
 class TeacherClass(PersonClass):
     subject = Text()
-    person_id = Relationship(PersonClass, r_type="one-to-one")
+    person_id = Relationship(PersonClass, r_type="one-to-one", pk=True)
 
     class Meta:
         inheritance = "CLASS"

@@ -21,6 +21,7 @@ class Query:
     def all(self):
         if hasattr(self.session, '_autoflush'):
             self.session._autoflush()
+            
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
             mapper, self.filters, limit=self._limit, offset=self._offset, joins=self._joins
@@ -28,34 +29,14 @@ class Query:
         
         rows = self.session.engine.execute(sql, params)
         
-        # Get column names from SQL result
-        if rows and hasattr(rows[0], 'keys'):
-            # sqlite3.Row objects
-            column_names = list(rows[0].keys()) if rows else list(mapper.columns.keys())
-        else:
-            # Fallback to mapper columns
-            column_names = list(mapper.columns.keys())
-        
         results = []
         for row in rows:
-            # Convert row to dict for mapper.hydrate()
-            if hasattr(row, 'keys'):
-                row_dict = dict(row)
-            else:
-                row_dict = dict(zip(column_names, row))
+            row_dict = dict(row) if hasattr(row, 'keys') else {}
             
-            # Check identity map BEFORE hydrating to avoid unnecessary work
-            pk_val = row_dict.get(mapper.pk)
-            if pk_val is not None:
-                # Note: We can't check identity map here because mapper.hydrate() might
-                # return a different class (polymorphism), so we check after hydration
-                pass
-            
-            # Use mapper's hydrate method (handles polymorphism automatically)
             obj = mapper.hydrate(row_dict)
+            print(f"DEBUG: Row type column: {row_dict.get('type')} -> Hydrated as: {type(obj).__name__}")
             
             if obj:
-                # Check identity map after hydration (now we know the correct class)
                 pk_val = getattr(obj, mapper.pk, None)
                 if pk_val is not None:
                     existing = self.session.identity_map.get(obj.__class__, pk_val)
@@ -65,9 +46,7 @@ class Query:
                         results.append(existing)
                         continue
                 
-                # Session handles making object persistent
                 obj = self.session._make_persistent(obj)
-            if obj and getattr(obj, '_orm_state', None) != ObjectState.DELETED:
                 results.append(obj)
                 
         return results

@@ -54,7 +54,10 @@ class Mapper:
         if requested:
             requested = requested.upper()
         else:
-            requested = (self.parent.inheritance.strategy.name if self.parent.inheritance else "SINGLE")
+            if self.parent and self.parent.inheritance:
+                requested = self.parent.inheritance.strategy.name
+            else:
+                requested = "SINGLE"
 
         if requested not in STRATEGIES:
             raise ValueError(f"Nieznana strategia dziedziczenia: {requested}")
@@ -63,7 +66,10 @@ class Mapper:
         discriminator_value = self.meta.get("discriminator_value", self.cls.__name__)
 
         self.inheritance = Inheritance(strategy, discriminator_value)
-        self.parent.children.append(self.cls)
+        if self.parent:
+            self.parent.children.append(self.cls)
+            if not self.parent.inheritance:
+                self.parent.inheritance = Inheritance(strategy, self.parent.cls.__name__)
     
     def _resolve_table_name(self):
         self.table_name = self.meta.get("table_name", self.cls.__name__+"s")
@@ -74,24 +80,28 @@ class Mapper:
         self.columns = dict(self.declared_columns)
 
         if self.inheritance:
-            self.columns = dict(self.declared_columns)
-            self.inheritance.strategy.resolve_columns(self)
-
-            if self.inheritance.discriminator is None:
-                root = self
-                while root.parent:
-                    root = root.parent
-                if root.discriminator in root.columns:
-                    self.inheritance.discriminator = root.columns[root.discriminator]
+            if self.parent:
+                self.columns = dict(self.parent.columns) | self.columns
             
             if self.inheritance.strategy.name == "SINGLE":
                 root = self
-                while root.parent:
-                    root = root.parent
+                while root.parent: root = root.parent
 
-                if root.discriminator_map is None:
+                if not hasattr(root, 'discriminator_map') or root.discriminator_map is None:
                     root.discriminator_map = {}
+                
                 root.discriminator_map[self.inheritance.discriminator_value] = self.cls
+                print(f"DEBUG: Registering {self.cls.__name__} in {root.cls.__name__} map")
+                
+                if root.discriminator not in root.columns:
+                    from orm_types import Text
+                    root.columns[root.discriminator] = Text(nullable=False)
+                
+                if self.parent:
+                    for name, col in self.declared_columns.items():
+                        if name not in root.columns:
+                            col.nullable = True
+                            root.columns[name] = col
         
     def _resolve_pk(self):
         pk_cols = [name for name, col in self.columns.items() if col.pk]
@@ -166,49 +176,45 @@ class Mapper:
     @staticmethod
     def finalize_mappers():
         from base import MiniBase
+        
+        for mapper in MiniBase._registry.values():
+            try:
+                mapper._resolve_pk()
+            except:
+                pass
+
         for mapper in MiniBase._registry.values():
             for name, rel in mapper.declared_relationships.items():
                 if name in mapper.relationships:
                     continue
                 target_cls = mapper._resolve_target_class(rel.target_table)
                 if target_cls is None:
-                    raise ValueError(f"Cannot resolve relationship target: {rel.target_table} (is {mapper.cls.__name__}.{name})")
+                    raise ValueError(f"Cannot resolve target: {rel.target_table}")
                 mapper._apply_relationship(name, rel, target_cls, target_cls._mapper)
+
         for mapper in MiniBase._registry.values():
             mapper._resolve_pk()
-        for mapper in MiniBase._registry.values():
-            if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
-                if mapper.parent and not any(
-                    getattr(rel, "_resolved_target", None) and getattr(rel._resolved_target, "_mapper", None) and rel._resolved_target._mapper.table_name == mapper.parent.table_name
-                    for rel in mapper.relationships.values()
-                ):
-                    raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
+
 
     def _get_insert_columns(self, entity):
         insert_data = {}
         for col_name, col_obj in self.columns.items():
             if col_name == self.pk:
-                pk_value = getattr(entity, col_name, None)
-                if isinstance(pk_value, Column):
-                    pk_value = None
-                if pk_value is not None:
-                    insert_data[col_name] = pk_value
-                continue
-            
-            if col_name == self.discriminator:
                 continue
             
             value = getattr(entity, col_name, None)
-            if isinstance(value, Column):
-                value = None
             
-            if value is not None:
+            if hasattr(value, '_mapper'):
+                target_pk = value._mapper.pk
+                value = getattr(value, target_pk, None)
+                
+            if value is not None and not hasattr(value, '__clause_element__'):
                 insert_data[col_name] = value
             elif col_obj.default is not None:
                 insert_data[col_name] = col_obj.default
             elif col_obj.nullable:
                 insert_data[col_name] = None
-        
+                
         return insert_data
 
     def get(self, id):
@@ -217,87 +223,182 @@ class Mapper:
     def get_all(self):
         return []
     
+
     def prepare_insert(self, entity, query_builder):
-        insert_data = self._get_insert_columns(entity)
+        operations = []
         
-        for col_name, col_obj in self.columns.items():
-            if col_name == self.pk:
-                continue  
-            if col_name == self.discriminator:
-                continue 
-            if col_name not in insert_data and not col_obj.nullable and col_obj.default is None:
-                raise ValueError(
-                    f"Required column '{col_name}' in {self.cls.__name__} has no value. "
-                    f"Set it or mark as nullable."
-                )
+        if self.inheritance and self.inheritance.strategy.name == "CLASS" and self.parent:
+            parent_ops = self.parent.prepare_insert(entity, query_builder)
+            operations.extend(parent_ops)
+            
+            local_data = {}
+            for col_name in self.declared_columns:
+                if hasattr(entity, col_name):
+                    local_data[col_name] = getattr(entity, col_name)
+            
+            sql, params = query_builder.build_insert(self, local_data)
+            
+            operations.append((sql, params, {
+                'table': self.table_name,
+                'data': local_data,
+                'fk_from_previous': self.pk 
+            }))
+            return operations
+
+        insert_data = self._get_insert_columns(entity)
         
         if self.inheritance and self.inheritance.strategy.name == "SINGLE":
             insert_data[self.discriminator] = self.discriminator_value
-        
+            
         sql, params = query_builder.build_insert(self, insert_data)
-        return [(sql, params, {})]
+        operations.append((sql, params, {'table': self.table_name, 'data': insert_data}))
+        
+        return operations
     
-    def prepare_update(self, entity):
-        return None
+    def _get_mapper_for_table(self, table_name):
+        from base import MiniBase
+        for m in MiniBase._registry.values():
+            if m.table_name == table_name:
+                return m
+        return self
     
-    def prepare_delete(self, id):
-        return None
+    def prepare_update(self, entity, query_builder, old_state):
+        if not old_state:
+            return []
+
+        operations = []
+        
+        changed_data = {}
+        for col_name in self.columns:
+            if col_name == self.pk: continue
+            
+            new_val = getattr(entity, col_name, None)
+            if hasattr(new_val, '_mapper'):
+                new_val = getattr(new_val, new_val._mapper.pk, None)
+                
+            if new_val != old_state.get(col_name):
+                changed_data[col_name] = new_val
+
+        if not changed_data:
+            return []
+
+        strategy_name = self.inheritance.strategy.name if self.inheritance else "NONE"
+
+        if strategy_name == "CLASS":
+            parent_data = {}
+            child_data = {}
+            
+            for col, val in changed_data.items():
+                if self.parent and col in self.parent.columns:
+                    parent_data[col] = val
+                elif col in self.declared_columns:
+                    child_data[col] = val
+            
+            if parent_data and self.parent:
+                sql, params = query_builder.build_update(
+                    self.parent, parent_data, {self.parent.pk: getattr(entity, self.pk)}
+                )
+                operations.append((sql, params, {'table': self.parent.table_name}))
+
+            if child_data:
+                sql, params = query_builder.build_update(
+                    self, child_data, {self.pk: getattr(entity, self.pk)}
+                )
+                operations.append((sql, params, {'table': self.table_name}))
+
+        else:
+            sql, params = query_builder.build_update(
+                self, changed_data, {self.pk: getattr(entity, self.pk)}
+            )
+            operations.append((sql, params, {'table': self.table_name}))
+
+        return operations
+    
+    def prepare_delete(self, entity, query_builder):
+        operations = []
+        pk_val = getattr(entity, self.pk)
+
+        for name, rel in self.relationships.items():
+            if rel.r_type == "many-to-many":
+                sql, params = query_builder.build_m2m_cleanup(
+                    rel.association_table.name,
+                    pk_val,
+                    rel.association_table.local_key
+                )
+                operations.append((sql, params, {'type': 'm2m_cleanup'}))
+        
+        if self.inheritance and self.inheritance.strategy.name == "CLASS":
+            sql, params = query_builder.build_delete(self, pk_val)
+            operations.append((sql, params, {'table': self.table_name}))
+            
+            if self.parent:
+                parent_sql, parent_params = query_builder.build_delete(self.parent, pk_val)
+                operations.append((parent_sql, parent_params, {'table': self.parent.table_name}))
+        
+        else:
+            sql, params = query_builder.build_delete(self, pk_val)
+            operations.append((sql, params, {'table': self.table_name}))
+            
+        return operations
     
     def hydrate(self, row_dict):
-        from base import MiniBase
-        from orm_types import ForeignKey
-        
         target_cls = self.cls
         
-        if self.inheritance:
-            if self.inheritance.strategy.name == "SINGLE":
-                root = self
-                while root.parent:
-                    root = root.parent
-                disc_col_name = root.discriminator
-                
-                if disc_col_name and disc_col_name in row_dict and root.discriminator_map:
-                    row_type_value = row_dict.get(disc_col_name)
-                    if row_type_value in root.discriminator_map:
-                        target_cls = root.discriminator_map[row_type_value]
+        inheritance_info = self.inheritance
+        if not inheritance_info and self.children:
+            inheritance_info = self.children[0]._mapper.inheritance
+
+        if inheritance_info:
+            strategy_name = inheritance_info.strategy.name
             
-            elif self.inheritance.strategy.name == "CLASS" and not self.parent:
-                for child_mapper in self.children:
-                    fk_col = None
-                    for col_name, col in child_mapper.columns.items():
-                        if isinstance(col, ForeignKey) and col.target_table == self.table_name:
-                            fk_col = col_name
+            if strategy_name == "SINGLE":
+                root_mapper = self
+                while root_mapper.parent:
+                    root_mapper = root_mapper.parent
+                
+                disc_val = row_dict.get(root_mapper.discriminator)
+                if root_mapper.discriminator_map and disc_val in root_mapper.discriminator_map:
+                    target_cls = root_mapper.discriminator_map[disc_val]
+
+            elif strategy_name == "CLASS" and not self.parent:
+                for child_cls in self.children:
+                    child_mapper = child_cls._mapper
+                    pk_alias = f"{child_mapper.table_name}_{child_mapper.pk}"
+                    
+                    if row_dict.get(pk_alias) is not None:
+                        target_cls = child_cls
+                        break
+
+            elif strategy_name == "CONCRETE" and not self.parent:
+                concrete_type = row_dict.get("_concrete_type")
+                if concrete_type:
+                    for child_cls in self.children:
+                        if child_cls.__name__ == concrete_type:
+                            target_cls = child_cls
                             break
 
-                    if fk_col is None:
-                        for rel_name, rel in child_mapper.relationships.items():
-                            target_cls = child_mapper._resolve_target_class(rel.target)
-                            if target_cls == self.cls and rel.r_type in ("many-to-one", "one-to-one"):
-                                if hasattr(rel, '_resolved_fk_name') and rel._resolved_fk_name:
-                                    fk_col = rel._resolved_fk_name
-                                    break
-                    if fk_col is None:
-                        fk_col = f"{self.table_name.rstrip('s').lower()}_id"
-                    
-                    alias_key = f"{child_mapper.table_name}_{fk_col}"
-                    fk_value = row_dict.get(alias_key) or row_dict.get(fk_col)
-                    if fk_value is not None:
-                        target_cls = child_mapper.cls
-                        break
-        
         obj = target_cls()
         target_mapper = target_cls._mapper
         
-        for name, value in row_dict.items():
-            if name in target_mapper.columns:
-                object.__setattr__(obj, name, value)
-            elif target_mapper.inheritance and target_mapper.inheritance.strategy.name == "CLASS":
-                parent_cols = set(target_mapper.parent.columns.keys()) if target_mapper.parent else set()
-                local_cols = [col_name for col_name in target_mapper.columns.keys() if col_name not in parent_cols]
-                for col_name in local_cols:
-                    alias = f"{target_mapper.table_name}_{col_name}"
-                    if name == alias:
+        for key, value in row_dict.items():
+            if key in target_mapper.columns:
+                object.__setattr__(obj, key, value)
+            
+            elif "_" in key:
+                parts = key.rsplit("_", 1)
+                if len(parts) == 2:
+                    table_prefix, col_name = parts
+                    if table_prefix == target_mapper.table_name and col_name in target_mapper.columns:
                         object.__setattr__(obj, col_name, value)
-                        break
         
         return obj
+    
+    def _hydrate_row_to_dict(self, row, column_names):
+        data = {}
+        row_map = dict(zip(column_names, row))
+        
+        for attr_name, col_obj in self.columns.items():
+            if attr_name in row_map:
+                data[attr_name] = row_map[attr_name]
+        
+        return data

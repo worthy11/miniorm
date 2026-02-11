@@ -33,8 +33,6 @@ class Pet(MiniBase):
     class Meta:
         table_name = "pets"
 
-    def __init__(self):
-        self.visits = []
 
 class Visit(MiniBase):
     id = Number(pk=True)
