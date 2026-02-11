@@ -5,13 +5,15 @@ from query import Query
 from transactions import InsertTransaction, UpdateTransaction, DeleteTransaction
 from mapper import Mapper
 from orm_types import Column, Relationship
+from builder import QueryBuilder
+from base import MiniBase
 
 class Session:
-    def __init__(self, engine, query_builder):
+    def __init__(self, engine):
         Mapper.finalize_mappers()
         
         self.engine = engine
-        self.query_builder = query_builder
+        self.query_builder = QueryBuilder()
         self.identity_map = IdentityMap()
         self.unit_of_work = deque() 
         self._snapshots = {}
@@ -68,11 +70,18 @@ class Session:
             if found_insert:
                 self.unit_of_work.remove(found_insert)
                 object.__setattr__(entity, '_orm_state', ObjectState.TRANSIENT)
-                print(f"DEBUG: Anulowano dodawanie obiektu {entity}. Zniknął z kolejki.")
+                print(f"DEBUG: Cancelled adding object {entity}. Removed from queue.")
             return
         if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
             object.__setattr__(entity, '_orm_state', ObjectState.DELETED)
-            self.unit_of_work.append(DeleteTransaction(self, entity))
+            dependents = self._collect_cascade_dependents(entity)
+            already_queued = {t.entity for t in self.unit_of_work
+                             if isinstance(t, DeleteTransaction)}
+            for e in dependents:
+                if e not in already_queued:
+                    object.__setattr__(e, '_orm_state', ObjectState.DELETED)
+                    self.unit_of_work.append(DeleteTransaction(self, e))
+                    already_queued.add(e)
 
     def flush(self):
         if self._in_flush:
@@ -139,7 +148,7 @@ class Session:
         except Exception as e:
             self.engine.execute("ROLLBACK")
             self.rollback()
-            raise RuntimeError(f"Błąd podczas flush: {e}")
+            raise RuntimeError(f"Error during flush: {e}")
         finally:
             self._in_flush = False
     
@@ -174,7 +183,7 @@ class Session:
             to_remove = old_ids - current_ids
 
             if to_add or to_remove:
-                print(f"DEBUG M2M [{instance}]: Synchronizacja {assoc.name} | Dodaję: {to_add}, Usuwam: {to_remove}")
+                print(f"DEBUG M2M [{instance}]: Sync {assoc.name} | Adding: {to_add}, Removing: {to_remove}")
 
             for target_id in to_add:
                 sql, params = self.query_builder.build_m2m_insert(
@@ -261,6 +270,44 @@ class Session:
             
         return deque(sorted_inserts + others)
 
+    def _collect_cascade_dependents(self, entity, _visited=None):
+        """Return list of entities to delete in order: dependents first (cascade_delete), then entity. No duplicates."""
+        if _visited is None:
+            _visited = set()
+        if id(entity) in _visited:
+            return []
+        _visited.add(id(entity))
+        out = []
+        mapper = entity._mapper
+        entity_pk = getattr(entity, mapper.pk, None)
+        if entity_pk is None:
+            return [entity]
+        target_table = mapper.table_name
+        for other_mapper in MiniBase._registry.values():
+            if other_mapper.cls is entity.__class__:
+                continue
+            for rel in other_mapper.relationships.values():
+                if not getattr(rel, 'cascade_delete', False):
+                    continue
+                if rel.r_type not in ('many-to-one', 'one-to-one'):
+                    continue
+                if not getattr(rel, '_resolved_target', None):
+                    continue
+                if rel._resolved_target._mapper.table_name != target_table:
+                    continue
+                fk_name = getattr(rel, '_resolved_fk_name', None)
+                if not fk_name:
+                    continue
+                self._is_loading = True
+                try:
+                    refs = self.query(other_mapper.cls).filter(**{fk_name: entity_pk}).all()
+                finally:
+                    self._is_loading = False
+                for ref in refs:
+                    out.extend(self._collect_cascade_dependents(ref, _visited))
+        out.append(entity)
+        return out
+
     def _get_dirty_objects(self):
         dirty = []
         for obj in list(self.identity_map._map.values()):
@@ -327,7 +374,7 @@ class Session:
         self._processed_transactions = []
         self.identity_map.clear()
         self._snapshots.clear()
-        print("DEBUG: wykonnano rollback. Obiekty zresetowane do stanu bezpiecznego.")
+        print("DEBUG: Rollback completed. Objects reset to safe state.")
         
     def _cascade_add(self, instance):
         mapper = instance._mapper
@@ -378,7 +425,7 @@ class Session:
         self._snapshots.clear()
         self.unit_of_work.clear()
         
-        print(f"DEBUG: Odpięto {len(all_tracked_objects)} obiektów.")
+        print(f"DEBUG: Detached {len(all_tracked_objects)} objects.")
     
     def __enter__(self): return self
     def __exit__(self, exc_type, exc_val, exc_tb):

@@ -34,8 +34,7 @@ class Query:
             row_dict = dict(row) if hasattr(row, 'keys') else {}
             
             obj = mapper.hydrate(row_dict)
-            print(f"DEBUG: Row type column: {row_dict.get('type')} -> Hydrated as: {type(obj).__name__}")
-            
+
             if obj:
                 pk_val = getattr(obj, mapper.pk, None)
                 if pk_val is not None:
@@ -64,7 +63,7 @@ class Query:
     def join(self, relationship_name):
         mapper = self.model_class._mapper
         if relationship_name not in mapper.relationships:
-            raise AttributeError(f"Model {self.model_class.__name__} nie ma relacji {relationship_name}")
+            raise AttributeError(f"Model {self.model_class.__name__} has no relationship {relationship_name}")
         
         rel = mapper.relationships[relationship_name]
         self._joins.append(rel)

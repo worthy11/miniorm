@@ -120,8 +120,8 @@ class MiniBase:
             if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED) and current_id is not None:
                 if current_id != value:
                     raise AttributeError(
-                        f"Krytyczny błąd: Nie można zmienić klucza głównego '{name}' "
-                        f"dla obiektu {self.__class__.__name__} po jego zapisaniu."
+                        f"Critical error: Cannot change primary key '{name}' "
+                        f"for {self.__class__.__name__} after it has been persisted."
                     )
 
         object.__setattr__(self, name, value)

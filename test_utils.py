@@ -25,8 +25,6 @@ def print_mapper_info(cls_name, mapper):
     print()
 
 def run_mapper_tests():
-    session = Session(None, None)
-    
     for cls, mapper in MiniBase._registry.items():
         name = cls.__name__
         print_mapper_info(name, mapper)

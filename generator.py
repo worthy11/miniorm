@@ -9,15 +9,15 @@ class SchemaGenerator:
 
     def _quote(self, identifier):
         if not identifier or not self._safe_ident_pattern.match(str(identifier)):
-            raise ValueError(f"Błąd bezpieczeństwa w nazwie identyfikatora SQL: {identifier}")
+            raise ValueError(f"Unsafe SQL identifier: {identifier}")
         return f'"{identifier}"'
     
     def create_all(self, engine, registry):
-        from mapper import Mapper
-        Mapper.finalize_mappers()
         table_definitions = {}
         
         for mapper in registry.values():
+            if mapper.inheritance.strategy.name == "CONCRETE" and getattr(mapper, 'children', None):
+                continue
             name = mapper.table_name
             if name not in table_definitions:
                 table_definitions[name] = {
@@ -31,7 +31,7 @@ class SchemaGenerator:
         for t_name, info in table_definitions.items():
             sql = self._generate_sql(t_name, info)
             engine.execute(sql)
-            print(f"DEBUG: Stworzono tabelę kompleksową: {t_name}")
+            print(f"DEBUG: Created table: {t_name}")
 
         created_m2m = set()
         for mapper in registry.values():
@@ -42,14 +42,14 @@ class SchemaGenerator:
                         sql = self.generate_m2m_table(rel)
                         engine.execute(sql)
                         created_m2m.add(assoc.name)
-                        print(f"DEBUG: Stworzono tabelę M2M: {assoc.name}")
+                        print(f"DEBUG: Created M2M table: {assoc.name}")
 
 
     def _generate_sql(self, table_name, info):
         quoted_table = self._quote(table_name)
         column_defs = []
         mapper = info['mapper']
-        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+        if mapper.inheritance.strategy.name == "CLASS":
             parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
             columns_to_include = {
                 name: col for name, col in mapper.columns.items() 
@@ -75,10 +75,11 @@ class SchemaGenerator:
 
         for name, col in columns_to_include.items():
             if hasattr(col, 'target_table'):
-                column_defs.append(
-                    f"FOREIGN KEY({self._quote(name)}) REFERENCES "
-                    f"{self._quote(col.target_table)}({self._quote(col.target_column)})"
-                )
+                ref_sql = (f"FOREIGN KEY({self._quote(name)}) REFERENCES "
+                           f"{self._quote(col.target_table)}({self._quote(col.target_column)})")
+                if getattr(col, 'on_delete_cascade', False):
+                    ref_sql += " ON DELETE CASCADE"
+                column_defs.append(ref_sql)
 
         return f"CREATE TABLE IF NOT EXISTS {quoted_table} ({', '.join(column_defs)});"
 

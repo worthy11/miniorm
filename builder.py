@@ -2,25 +2,20 @@ import re
 
 class QueryBuilder:
     def __init__(self):
-        self._safe_ident_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+        self._safe_ident_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_#]*$')
 
     def _quote(self, identifier):
         if not identifier or not self._safe_ident_pattern.match(str(identifier)):
-            raise ValueError(f"Niebezpieczna nazwa identyfikatora SQL: {identifier}")
+            raise ValueError(f"Unsafe SQL identifier: {identifier}")
         return f'"{identifier}"'
 
-    def build_insert(self, mapper, data):
-        """Build INSERT SQL from mapper and data dict.
-        Data dict should already contain all necessary columns in the correct form
-        (inheritance strategies handle discriminator values).
-        """
-        table = self._quote(mapper.table_name)
-        
+    def build_insert(self, table_name, data):
+        """Build INSERT SQL from table name and data dict. Does not use mapper."""
+        table = self._quote(table_name)
         fields = list(data.keys())
         quoted_fields = [self._quote(f) for f in fields]
         placeholders = ", ".join(["?" for _ in fields])
         values = [data[f] for f in fields]
-        
         sql = f"INSERT INTO {table} ({', '.join(quoted_fields)}) VALUES ({placeholders})"
         return sql, tuple(values)
 
@@ -32,7 +27,15 @@ class QueryBuilder:
         filter_prefix = table
 
         if mapper.inheritance and mapper.inheritance.strategy.name == "CONCRETE" and not mapper.parent and mapper.children:
-            all_mappers = [mapper] + [c._mapper for c in mapper.children]
+            # Only descendant tables (no parent table) for concrete inheritance
+            def _concrete_descendant_mappers(m):
+                out = []
+                for child_cls in m.children:
+                    cm = child_cls._mapper
+                    out.append(cm)
+                    out.extend(_concrete_descendant_mappers(cm))
+                return out
+            all_mappers = _concrete_descendant_mappers(mapper)
             all_possible_cols = set()
             for m in all_mappers:
                 all_possible_cols.update(m.columns.keys())
@@ -49,7 +52,7 @@ class QueryBuilder:
                         m_select_cols.append(f"NULL AS {self._quote(c_name)}")
                 
                 m_select_cols.append(f"'{m.cls.__name__}' AS _concrete_type")
-                union_parts.append(f"SELECT {', '.join(m_select_cols)} FROM {m_quoted_table}")
+                union_parts.append(f"SELECT DISTINCT {', '.join(m_select_cols)} FROM {m_quoted_table}")
             
             subquery = " UNION ALL ".join(union_parts)
             table = f"({subquery})"
@@ -89,11 +92,11 @@ class QueryBuilder:
                     sub_table = self._quote(cm.table_name)
                     all_joins.append(f'LEFT JOIN {sub_table} ON {table}.{self._quote(mapper.pk)} = {sub_table}.{self._quote(cm.pk)}')
                     
-                    child_pk_alias = f"{cm.table_name}_{cm.pk}"
+                    child_pk_alias = f"{cm.table_name}#{cm.pk}"
                     cols.append(f"{sub_table}.{self._quote(cm.pk)} AS {self._quote(child_pk_alias)}")
                     for col_name in cm.declared_columns.keys():
                         if col_name == cm.pk: continue
-                        alias = f"{cm.table_name}_{col_name}"
+                        alias = f"{cm.table_name}#{col_name}"
                         cols.append(f"{sub_table}.{self._quote(col_name)} AS {self._quote(alias)}")
 
             if joins:
@@ -161,9 +164,10 @@ class QueryBuilder:
 
         return sql, tuple(params)
     
-    def build_delete(self, mapper, pk_value):
-        table = self._quote(mapper.table_name)
-        pk_col = self._quote(mapper.pk)
+    def build_delete(self, table_name, pk_value, pk_column="id"):
+        """Build DELETE SQL from table name and pk. Does not use mapper."""
+        table = self._quote(table_name)
+        pk_col = self._quote(pk_column)
         sql = f"DELETE FROM {table} WHERE {pk_col} = ?"
         return sql, (pk_value,)
 
@@ -189,19 +193,18 @@ class QueryBuilder:
         
         return sql, (local_id,)
 
-    def build_update(self, mapper, data, filters):
-        table = self._quote(mapper.table_name)
-
+    def build_update(self, table_name, data, pk_column="id"):
+        """Build UPDATE SQL from table name and data dict. data must contain _pk for WHERE. Does not use mapper."""
+        table = self._quote(table_name)
+        data = dict(data)
+        pk_val = data.pop("_pk", None)
+        if pk_val is None:
+            raise ValueError("update data must contain _pk for WHERE clause")
         set_parts = []
         params = []
         for col, val in data.items():
             set_parts.append(f"{self._quote(col)} = ?")
             params.append(val)
-        
-        where_parts = []
-        for col, val in filters.items():
-            where_parts.append(f"{self._quote(col)} = ?")
-            params.append(val)
-            
-        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {' AND '.join(where_parts)}"
+        params.append(pk_val)
+        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {self._quote(pk_column)} = ?"
         return sql, tuple(params)

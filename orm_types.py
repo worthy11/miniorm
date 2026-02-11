@@ -11,11 +11,12 @@ class AssociationTable:
 
 
 class Relationship:
-    def __init__(self, target, r_type="many-to-one", pk=False, backref=None):
+    def __init__(self, target, r_type="many-to-one", pk=False, backref=None, cascade_delete=False):
         self.target_table = target
         self.r_type = r_type
         self.pk = pk
         self.backref = backref
+        self.cascade_delete = cascade_delete
         self.local_table = None   # table that declares this relationship (resolved by mapper)
         self.remote_table = None  # target table (resolved by mapper)
         self._resolved_target = None
@@ -50,7 +51,8 @@ class Number(Column):
         super().__init__(int, pk, nullable, unique, default)
 
 class ForeignKey(Column):
-    def __init__(self, target_table, target_column, pk=False, nullable=True, unique=True):
+    def __init__(self, target_table, target_column, pk=False, nullable=True, unique=True, on_delete_cascade=False):
         super().__init__(int, pk=pk, nullable=nullable, unique=unique)
         self.target_table = target_table
         self.target_column = target_column
+        self.on_delete_cascade = on_delete_cascade
