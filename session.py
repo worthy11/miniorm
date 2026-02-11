@@ -4,6 +4,7 @@ from identity_map import IdentityMap
 from query import Query
 from transactions import InsertTransaction, UpdateTransaction, DeleteTransaction
 from mapper import Mapper
+from orm_types import Column, Relationship
 
 class Session:
     def __init__(self, engine, query_builder):
@@ -14,6 +15,7 @@ class Session:
         self.identity_map = IdentityMap()
         self.unit_of_work = deque() 
         self._snapshots = {}
+        self._processed_transactions = []
         self._in_flush = False
         self._is_loading = False
 
@@ -28,6 +30,10 @@ class Session:
 
     def add(self, entity):
         state = getattr(entity, '_orm_state', None)
+        
+        if any(t.entity is entity and isinstance(t, InsertTransaction) for t in self.unit_of_work):
+            return
+
         if state == ObjectState.DETACHED:
             object.__setattr__(entity, '_session', self)
             object.__setattr__(entity, '_orm_state', ObjectState.PERSISTENT)
@@ -37,12 +43,12 @@ class Session:
             return
 
         if state == ObjectState.TRANSIENT:
-            object.__setattr__(entity, '_orm_state', ObjectState.PENDING)
             object.__setattr__(entity, '_session', self)
-            
-            self._cascade_add(entity)
+            object.__setattr__(entity, '_orm_state', ObjectState.PENDING)
             
             self.unit_of_work.append(InsertTransaction(self, entity))
+            
+            self._cascade_add(entity)
 
     def update(self, entity):
         state = getattr(entity, '_orm_state', None)
@@ -52,6 +58,18 @@ class Session:
 
     def delete(self, entity):
         state = getattr(entity, '_orm_state', None)
+        if state == ObjectState.PENDING:
+            found_insert = None
+            for t in self.unit_of_work:
+                if t.entity is entity and isinstance(t, InsertTransaction):
+                    found_insert = t
+                    break
+            
+            if found_insert:
+                self.unit_of_work.remove(found_insert)
+                object.__setattr__(entity, '_orm_state', ObjectState.TRANSIENT)
+                print(f"DEBUG: Anulowano dodawanie obiektu {entity}. Zniknął z kolejki.")
+            return
         if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
             object.__setattr__(entity, '_orm_state', ObjectState.DELETED)
             self.unit_of_work.append(DeleteTransaction(self, entity))
@@ -61,7 +79,8 @@ class Session:
             return
             
         self._in_flush = True
-        
+        self._processed_transactions = []
+
         dirty_objects = self._get_dirty_objects()
         for obj in dirty_objects:
             is_queued = any(t.entity is obj and isinstance(t, UpdateTransaction) for t in self.unit_of_work)
@@ -74,20 +93,23 @@ class Session:
 
         self.unit_of_work = self._sort_unit_of_work()
 
+        entities_to_sync = set()
+
         try:
             self.engine.execute("BEGIN TRANSACTION")
 
             while self.unit_of_work:
                 transaction = self.unit_of_work.popleft()
-                operations = transaction.prepare()
+                self._processed_transactions.append(transaction)
+                entities_to_sync.add(transaction.entity)
                 
+                operations = transaction.prepare()
                 if not isinstance(operations, list):
                     operations = [operations]
                 
                 current_id = None
                 for op in operations:
                     sql, params, apply_side_effects, rebuild_fn = op
-                    
                     if rebuild_fn and current_id is not None:
                         sql, params = rebuild_fn(current_id)
                     
@@ -105,11 +127,14 @@ class Session:
                         if apply_side_effects:
                             apply_side_effects(None, None)
 
-                from transactions import DeleteTransaction
-                if not isinstance(transaction, DeleteTransaction):
-                    self._flush_m2m(transaction.entity)
+                for entity in list(entities_to_sync):
+                    state = getattr(entity, '_orm_state', None)
+                    if state == ObjectState.DELETED:
+                        continue
+                    self._flush_m2m(entity)
 
             self.engine.execute("COMMIT")
+            self._processed_transactions = []
 
         except Exception as e:
             self.engine.execute("ROLLBACK")
@@ -123,52 +148,66 @@ class Session:
         mapper = instance._mapper
         for name, rel in mapper.relationships.items():
             if rel.r_type != "many-to-many": continue
-
+            
+            assoc = rel.association_table
             current_objects = getattr(instance, name, [])
-            current_ids = set()
+            
             for obj in current_objects:
-
                 if getattr(obj, '_orm_state', None) == ObjectState.TRANSIENT:
-                    self.add(obj) 
-                    self.flush()
-                
-                pk = getattr(obj, obj._mapper.pk, None)
-                if pk: current_ids.add(pk)
+                    self.add(obj)
 
-            old_snapshot = self._snapshots.get(id(instance))
-            old_ids = set()
-            if old_snapshot and name in old_snapshot:
-                 old_ids = set(old_snapshot[name])
+            def safe_int(val):
+                if val is None or isinstance(val, Column): return None
+                try: return int(val)
+                except: return str(val)
 
-            local_id = getattr(instance, mapper.pk)
+            current_ids = {safe_int(getattr(o, o._mapper.pk)) for o in current_objects 
+                           if hasattr(o, '_mapper') and safe_int(getattr(o, o._mapper.pk)) is not None}
+            
+            old_snapshot = self._snapshots.get(id(instance), {})
+            old_ids = {safe_int(x) for x in old_snapshot.get(name, [])}
+
+            local_id = safe_int(getattr(instance, mapper.pk))
+            if local_id is None: continue
 
             to_add = current_ids - old_ids
             to_remove = old_ids - current_ids
 
-            assoc = rel.association_table
+            if to_add or to_remove:
+                print(f"DEBUG M2M [{instance}]: Synchronizacja {assoc.name} | Dodaję: {to_add}, Usuwam: {to_remove}")
+
             for target_id in to_add:
                 sql, params = self.query_builder.build_m2m_insert(
-                    assoc.name, local_id, target_id,
-                    assoc.local_key, assoc.remote_key
+                    assoc.name, local_id, target_id, assoc.local_key, assoc.remote_key
                 )
                 try: self.engine.execute(sql, params)
-                except: pass
+                except: pass 
 
             for target_id in to_remove:
                 sql, params = self.query_builder.build_m2m_delete(
-                    assoc.name, local_id, target_id,
-                    assoc.local_key, assoc.remote_key
+                    assoc.name, local_id, target_id, assoc.local_key, assoc.remote_key
                 )
                 self.engine.execute(sql, params)
 
     def _take_snapshot(self, instance):
         if not instance._mapper: return
-        state = {col: getattr(instance, col) for col in instance._mapper.columns if hasattr(instance, col)}
-        
+
+        state = {}
+        for col in instance._mapper.columns:
+            if col in instance.__dict__:
+                state[col] = instance.__dict__[col]
+
         for name, rel in instance._mapper.relationships.items():
-            if rel.r_type == "many-to-many" and name in instance.__dict__:
-                ids = [o.id for o in getattr(instance, name, []) if hasattr(o, 'id')]
-                state[name] = ids
+            if rel.r_type == "many-to-many":
+                current_val = instance.__dict__.get(name)
+                if isinstance(current_val, list):
+                    ids = []
+                    for o in current_val:
+                        pk_val = getattr(o, o._mapper.pk, None)
+                        if pk_val is not None and not isinstance(pk_val, Column):
+                            try: ids.append(int(pk_val))
+                            except: ids.append(str(pk_val))
+                    state[name] = sorted(ids)
                 
         self._snapshots[id(instance)] = state
 
@@ -224,17 +263,17 @@ class Session:
 
     def _get_dirty_objects(self):
         dirty = []
-        for obj in self.identity_map._map.values():
-            if getattr(obj, '_orm_state', None) != ObjectState.PERSISTENT: continue
+        for obj in list(self.identity_map._map.values()):
+            if getattr(obj, '_orm_state', None) not in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
+                continue
             
             old_state = self._snapshots.get(id(obj))
-            if not old_state: continue
+            if old_state is None: continue
             
             is_dirty = False
             for col in obj._mapper.columns:
                 if col == obj._mapper.pk: continue
-                current_val = obj.__dict__.get(col)
-                if current_val != old_state.get(col):
+                if obj.__dict__.get(col) != old_state.get(col):
                     is_dirty = True
                     break
             
@@ -242,11 +281,20 @@ class Session:
                 for name, rel in obj._mapper.relationships.items():
                     if rel.r_type == "many-to-many":
                         current_collection = obj.__dict__.get(name)
-                        
                         if isinstance(current_collection, list):
-                            current_ids = set(o.id for o in current_collection if hasattr(o, 'id'))
-                            old_ids = set(old_state.get(name, []))
-                            if current_ids != old_ids:
+                            c_ids = []
+                            for o in current_collection:
+                                pk_val = getattr(o, o._mapper.pk, None)
+                                if pk_val is None or isinstance(pk_val, Column):
+                                    c_ids.append(f"new_{id(o)}")
+                                else:
+                                    try: c_ids.append(int(pk_val))
+                                    except: c_ids.append(str(pk_val))
+                            
+                            c_ids.sort(key=lambda x: str(x))
+                            o_ids = sorted(old_state.get(name, []), key=lambda x: str(x))
+                            
+                            if c_ids != o_ids:
                                 is_dirty = True
                                 break
             
@@ -257,34 +305,29 @@ class Session:
         self.flush()
         self.engine.commit()
         for obj in list(self.identity_map._map.values()):
-            if getattr(obj, '_orm_state', None) == ObjectState.PERSISTENT:
+            state = getattr(obj, '_orm_state', None)
+            if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
                 self._take_snapshot(obj)
                 object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
 
     def rollback(self):
-        self.engine.rollback()
+        to_undo = self._processed_transactions + list(self.unit_of_work)
         
-        # 2. Sprzątanie obiektów w pamięci
-        for transaction in self.unit_of_work:
+        for transaction in to_undo:
             entity = transaction.entity
+            mapper = entity._mapper 
             
-            # Jeśli to był INSERT, Edek musi stać się znów 'nowy' (bez ID)
             if isinstance(transaction, InsertTransaction):
-                # Używamy object.__setattr__, żeby ominąć magię __setattr__ (jeśli ją masz)
-                object.__setattr__(entity, self.mapper.pk, None)
+                object.__setattr__(entity, mapper.pk, None)
                 object.__setattr__(entity, '_orm_state', ObjectState.TRANSIENT)
-                object.__setattr__(entity, '_session', self)
-            
-            # Jeśli to był UPDATE lub DELETE, obiekt wciąż żyje w bazie w starej wersji
             elif isinstance(transaction, (UpdateTransaction, DeleteTransaction)):
                 object.__setattr__(entity, '_orm_state', ObjectState.PERSISTENT)
 
-        # 3. Czyszczenie struktur sesji
         self.unit_of_work.clear()
-        self.identity_map.clear()  # Najbezpieczniejszy ruch - po błędzie nie ufamy mapie
+        self._processed_transactions = []
+        self.identity_map.clear()
         self._snapshots.clear()
-        
-        print("DEBUG: Sprzątanie po rollbacku zakończone. Obiekty zresetowane.")
+        print("DEBUG: wykonnano rollback. Obiekty zresetowane do stanu bezpiecznego.")
         
     def _cascade_add(self, instance):
         mapper = instance._mapper

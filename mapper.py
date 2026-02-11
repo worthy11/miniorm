@@ -226,6 +226,11 @@ class Mapper:
 
     def prepare_insert(self, entity, query_builder):
         operations = []
+
+        def clean_val(v):
+            if v.__class__.__name__ in ('Number', 'String', 'Relationship', 'Column'):
+                return None
+            return v
         
         if self.inheritance and self.inheritance.strategy.name == "CLASS" and self.parent:
             parent_ops = self.parent.prepare_insert(entity, query_builder)
@@ -234,10 +239,9 @@ class Mapper:
             local_data = {}
             for col_name in self.declared_columns:
                 if hasattr(entity, col_name):
-                    local_data[col_name] = getattr(entity, col_name)
+                    local_data[col_name] = clean_val(getattr(entity, col_name))
             
             sql, params = query_builder.build_insert(self, local_data)
-            
             operations.append((sql, params, {
                 'table': self.table_name,
                 'data': local_data,
@@ -246,6 +250,7 @@ class Mapper:
             return operations
 
         insert_data = self._get_insert_columns(entity)
+        insert_data = {k: clean_val(v) for k, v in insert_data.items()}
         
         if self.inheritance and self.inheritance.strategy.name == "SINGLE":
             insert_data[self.discriminator] = self.discriminator_value
