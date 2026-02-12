@@ -1,5 +1,5 @@
-from .base import MiniBase
-from .states import ObjectState
+from miniorm.base import MiniBase
+from miniorm.states import ObjectState
 
 class Query:
     def __init__(self, model_class, session):
@@ -17,22 +17,35 @@ class Query:
     def limit(self, value: int):
         self._limit = value
         return self
-
+    
     def all(self):
         if hasattr(self.session, '_autoflush'):
             self.session._autoflush()
+            
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
             mapper, self.filters, limit=self._limit, offset=self._offset, joins=self._joins
         )
         
         rows = self.session.engine.execute(sql, params)
-        column_names = list(mapper.columns.keys())
+        
         results = []
         for row in rows:
-            obj = self._hydrate(row, column_names, mapper)
+            row_dict = dict(row) if hasattr(row, 'keys') else {}
             
-            if obj and getattr(obj, '_orm_state', None) != ObjectState.DELETED:
+            obj = mapper.hydrate(row_dict)
+
+            if obj:
+                pk_val = getattr(obj, mapper.pk, None)
+                if pk_val is not None:
+                    existing = self.session.identity_map.get(obj.__class__, pk_val)
+                    if existing:
+                        if getattr(existing, '_orm_state', None) == ObjectState.DELETED:
+                            continue
+                        results.append(existing)
+                        continue
+                
+                obj = self.session._make_persistent(obj)
                 results.append(obj)
                 
         return results
@@ -50,14 +63,14 @@ class Query:
     def join(self, relationship_name):
         mapper = self.model_class._mapper
         if relationship_name not in mapper.relationships:
-            raise AttributeError(f"Model {self.model_class.__name__} nie ma relacji {relationship_name}")
+            raise AttributeError(f"Model {self.model_class.__name__} has no relationship {relationship_name}")
         
         rel = mapper.relationships[relationship_name]
         self._joins.append(rel)
         return self
     
  
-    def join_m2m(self, assoc_table, local_key, remote_key, local_id):   #To do
+    def join_m2m(self, assoc_table, local_key, remote_key, local_id):
         target_mapper = self.model_class._mapper
         target_table = target_mapper.table_name
         target_pk = target_mapper.pk
@@ -70,46 +83,25 @@ class Query:
         
         results = []
         for row in rows:
-            pk_val = row[target_pk]
+            row_dict = dict(row) if hasattr(row, 'keys') else {}
+            
+            pk_val = row_dict.get(target_pk)
             existing = self.session.identity_map.get(self.model_class, pk_val)
+            
             if existing:
                 results.append(existing)
             else:
-                obj = self.model_class()
-                for key, val in row.items():
-                    object.__setattr__(obj, key, val)
-                object.__setattr__(obj, '_orm_state', "PERSISTENT")
+                obj = target_mapper.hydrate(row_dict)
+                
+                from miniorm.states import ObjectState
+                object.__setattr__(obj, '_orm_state', ObjectState.PERSISTENT)
                 object.__setattr__(obj, '_session', self.session)
+                
                 self.session.identity_map.add(self.model_class, pk_val, obj)
+                self.session._take_snapshot(obj)
                 results.append(obj)
         
         self._results = results
         return self
 
     
-    def _hydrate(self, row, column_names, base_mapper):
-        target_cls = self.model_class
-        if "type" in column_names:
-            try:
-                type_idx = column_names.index("type")
-                class_name = row[type_idx]
-                target_cls = next((c for c in MiniBase._registry if c.__name__ == class_name), target_cls)
-            except (ValueError, IndexError):
-                pass
-
-        pk_val = row[column_names.index(base_mapper.pk)]
-        existing = self.session.identity_map.get(target_cls, pk_val)
-        if existing: 
-            if getattr(existing, '_orm_state', None) == ObjectState.DELETED:
-                return None
-            return existing
-
-        obj = target_cls()
-        for i, name in enumerate(column_names):
-            if hasattr(obj, name) or name in target_cls._mapper.columns:
-                setattr(obj, name, row[i])
-
-        obj._orm_state = ObjectState.PERSISTENT
-        obj._session = self.session
-        self.session.identity_map.add(target_cls, pk_val, obj)
-        return obj

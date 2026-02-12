@@ -1,9 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from miniorm.database import DatabaseEngine
-from miniorm.builder import QueryBuilder
 from miniorm.session import Session
 from models import Person
+from deps import get_session
 
 router = APIRouter()
 
@@ -14,23 +13,20 @@ class PersonCreate(BaseModel):
     phone: str
 
 @router.post("/api/persons")
-def create_person(person: PersonCreate):
-    engine = DatabaseEngine("miniorm.sqlite")
-    builder = QueryBuilder()
+def create_person(person: PersonCreate, session: Session = Depends(get_session)):
     new_person = Person(
         first_name=person.first_name,
         last_name=person.last_name,
         email=person.email,
         phone=person.phone
     )
-    with Session(engine, builder) as session:
-        session.add(new_person)
-        session.commit()
-        return {
-            "person_id": new_person.person_id,
-            "first_name": new_person.first_name,
-            "last_name": new_person.last_name,
-            "email": new_person.email,
-            "phone": new_person.phone,
-            "message": "Person created successfully"
-        }
+    session.add(new_person)
+    session.commit()
+    return {
+        "person_id": new_person.person_id,
+        "first_name": new_person.first_name,
+        "last_name": new_person.last_name,
+        "email": new_person.email,
+        "phone": new_person.phone,
+        "message": "Person created successfully"
+    }

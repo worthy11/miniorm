@@ -1,9 +1,9 @@
 # MiniORM - A lightweight Python ORM
-from .base import MiniBase
-from .session import Session
-from .mapper import Mapper
-from .query import Query
-from .database import DatabaseEngine
+from miniorm.base import MiniBase
+from miniorm.session import Session
+from miniorm.mapper import Mapper
+from miniorm.query import Query
+from miniorm.database import DatabaseEngine
 
 __version__ = "0.1.0"
 __all__ = ["MiniBase", "Session", "Mapper", "Query", "DatabaseEngine"]
