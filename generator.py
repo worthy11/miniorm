@@ -12,6 +12,10 @@ class SchemaGenerator:
             raise ValueError(f"Unsafe SQL identifier: {identifier}")
         return f'"{identifier}"'
     
+    def _get_existing_columns(self, engine, table_name):
+        rows = engine.execute(f"PRAGMA table_info({self._quote(table_name)})")
+        return [row[1] for row in rows]
+    
     def create_all(self, engine, registry):
         table_definitions = {}
         
@@ -26,11 +30,22 @@ class SchemaGenerator:
                     'mapper': mapper
                 }
             
-            table_definitions[name]['columns'].update(mapper.columns)
+            if mapper.inheritance.strategy.name == "CLASS":
+                table_definitions[name]['columns'].update(mapper.declared_columns)
+            else:
+                table_definitions[name]['columns'].update(mapper.columns)
 
         for t_name, info in table_definitions.items():
             sql = self._generate_sql(t_name, info)
             engine.execute(sql)
+            existing_cols = self._get_existing_columns(engine, t_name)
+            for col_name, col_obj in info['columns'].items():
+                if col_name not in existing_cols:
+                    print(f"DEBUG: Migration: Adding missing column '{col_name}' to table '{t_name}'")
+                    sql_type = self.TYPE_MAP.get(col_obj.dtype, "TEXT")
+                    
+                    alter_sql = f"ALTER TABLE {self._quote(t_name)} ADD COLUMN {self._quote(col_name)} {sql_type} NULL"
+                    engine.execute(alter_sql)
             print(f"DEBUG: Created table: {t_name}")
 
         created_m2m = set()

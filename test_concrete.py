@@ -8,6 +8,7 @@ from test_utils import run_mapper_tests
 class Person(MiniBase):
     id = Number(pk=True)
     name = Text()
+    # age = Text()
 
     class Meta:
         table_name = "people"
@@ -83,15 +84,15 @@ if __name__ == "__main__":
     generator.create_all(engine, MiniBase._registry)
     
     with Session(engine) as session:
-        owner = Owner(name="John Doe", phone="1234567890")
+        owner = Owner(name="John Doeeee", phone="1234567890", age="33")
         session.add(owner)
         session.commit()
 
-        vet = Vet(name="Jane Smith", specialization="Cardiology")
+        vet = Vet(name="Jane Smithhhh", specialization="Cardiology")
         session.add(vet)
         session.commit()
 
-        pet = Pet(name="Buddy", owner=owner)
+        pet = Pet(name="Buddyyyy", owner=owner, species="dog")
         session.add(pet)
         session.commit()
 
@@ -118,3 +119,11 @@ if __name__ == "__main__":
         procedures = session.query(Procedure).all()
         for procedure in procedures:
             print(procedure)
+
+
+        print("\n--- TEST MIGRACJI (ALTER TABLE) ---")
+        pets = session.query(Pet).all()
+        for p in pets:
+            # Stare rekordy będą miały species=None
+            # Nowy rekord (Rex) będzie miał species='Dog'
+            print(f"Pet: {p.name}, Species: {getattr(p, 'species', 'N/A')}")

@@ -8,6 +8,7 @@ from test_utils import run_mapper_tests
 class Person(MiniBase):
     id = Number(pk=True)
     name = Text()
+    # nationality = Text()
 
     class Meta:
         table_name = "people"
@@ -19,6 +20,7 @@ class Person(MiniBase):
 class Owner(Person):
     person_id = Relationship("people", r_type="one-to-one", pk=True)
     phone = Text()
+    # address = Text()
 
     class Meta:
         table_name = "owners"
@@ -89,7 +91,7 @@ if __name__ == "__main__":
     generator.create_all(engine, MiniBase._registry)
     
     with Session(engine) as session:
-        owner = Owner(name="John Doe", phone="1234567890")
+        owner = Owner(name="John Doe", phone="1234567890", nationality="polish", address="krakow")
         session.add(owner)
         session.commit()
 

@@ -54,7 +54,10 @@ class MiniBase:
             return object.__getattribute__(self, name)
         
         if state in (ObjectState.TRANSIENT, ObjectState.PENDING):
-            return object.__getattribute__(self, name)
+            val = object.__getattribute__(self, name)
+            if isinstance(val, (Column, type)) and not name.startswith('_'):
+                return None
+            return val
 
         if name in mapper.relationships:
             rel = mapper.relationships[name]
@@ -75,6 +78,9 @@ class MiniBase:
         val = object.__getattribute__(self, name)
 
         if isinstance(val, Column) and state != ObjectState.TRANSIENT:
+            return None
+        
+        if isinstance(val, (Column, type)) and not name.startswith('_'):
             return None
 
         return val

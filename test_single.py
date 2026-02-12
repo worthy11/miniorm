@@ -86,11 +86,11 @@ if __name__ == "__main__":
     generator.create_all(engine, MiniBase._registry)
     
     with Session(engine) as session:
-        owner = Owner(name="John Doe", phone="1234567890")
+        owner = Owner(name="John Doe", phone="1234567890", birth_date="2004", bonus_points=10)
         session.add(owner)
         session.commit()
 
-        vet = Vet(name="Jane Smith", specialization="Cardiology")
+        vet = Vet(name="Jane Smith", specialization="Cardiology", birth_date="2006", bonus_points=30)
         session.add(vet)
         session.commit()
 
@@ -102,10 +102,10 @@ if __name__ == "__main__":
         for person in people:
             print(person)
 
-        owners = session.query(Owner).all()
-        for owner in owners:
-            print(owner)
-            session.delete(owner)
+        # owners = session.query(Owner).all()
+        # for owner in owners:
+        #     print(owner)
+        #     session.delete(owner)
 
         vets = session.query(Vet).all()
         for vet in vets:
