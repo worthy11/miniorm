@@ -88,6 +88,7 @@ class DeleteTransaction(Transaction):
         builder = self.session.query_builder
 
         operations = mapper.prepare_delete(self.entity)
+        print(f"[DEBUG]: Operations: {operations}")
         m2m = operations.pop("_m2m_cleanup", [])
         
         results = []

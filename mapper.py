@@ -170,7 +170,6 @@ class Mapper:
         """Resolve all deferred relationships and re-resolve PKs (in case relationship FKs are PKs)."""
         from base import MiniBase
         
-        # Resolve deferred relationships
         for mapper in MiniBase._registry.values():
             resolved = []
             for name, rel in mapper._pending_relationships:
@@ -181,17 +180,14 @@ class Mapper:
             for item in resolved:
                 mapper._pending_relationships.remove(item)
         
-        # Check for unresolved relationships
         for mapper in MiniBase._registry.values():
             if mapper._pending_relationships:
                 pending = [(n, r.target_table) for n, r in mapper._pending_relationships]
                 raise ValueError(f"Cannot resolve relationship target(s) after all models loaded: {mapper.cls.__name__} pending: {pending}")
         
-        # Re-resolve PKs (relationships may have added FK columns that are PKs)
         for mapper in MiniBase._registry.values():
             mapper._resolve_pk()
         
-        # Validate CLASS inheritance requirements
         for mapper in MiniBase._registry.values():
             if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
                 if mapper.parent and not any(
@@ -247,11 +243,13 @@ class Mapper:
 
         for key, value in row_dict.items():
             if value is not None:
-                if "#" not in key:
-                    object.__setattr__(obj, key, value)
+                if "#" in key:
+                    table_name, col_name = key.split("#", 1)
+                    if table_name == target_mapper.table_name or col_name in attributes:
+                        object.__setattr__(obj, col_name, value)
                 else:
-                    table_name, col_name = key.split("#")
-                    object.__setattr__(obj, col_name, value)
+                    if key in attributes:
+                        object.__setattr__(obj, key, value)
 
         return obj
     

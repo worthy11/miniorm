@@ -52,12 +52,6 @@ class MiniBase:
 
         if name == mapper.pk:
             return object.__getattribute__(self, name)
-        
-        if state in (ObjectState.TRANSIENT, ObjectState.PENDING):
-            val = object.__getattribute__(self, name)
-            if isinstance(val, (Column, type)) and not name.startswith('_'):
-                return None
-            return val
 
         if name in mapper.relationships:
             rel = mapper.relationships[name]
@@ -74,8 +68,27 @@ class MiniBase:
                     value = self._load_relationship(session, rel)
                     object.__setattr__(self, name, value)
                     return value
+                else:
+                    # No session yet - return empty list for collections, None for many-to-one
+                    if rel.r_type in ("one-to-many", "many-to-many"):
+                        empty_list = []
+                        object.__setattr__(self, name, empty_list)
+                        return empty_list
+                    return None
 
         val = object.__getattribute__(self, name)
+
+        # Handle Relationship/Column objects for TRANSIENT/PENDING states
+        if state in (ObjectState.TRANSIENT, ObjectState.PENDING):
+            if isinstance(val, Relationship):
+                if val.r_type in ("one-to-many", "many-to-many"):
+                    empty_list = []
+                    object.__setattr__(self, name, empty_list)
+                    return empty_list
+                return None
+            if isinstance(val, (Column, type)) and not name.startswith('_'):
+                return None
+            return val
 
         if isinstance(val, Column) and state != ObjectState.TRANSIENT:
             return None

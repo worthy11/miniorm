@@ -27,7 +27,7 @@ class Owner(Person):
         inheritance = "CLASS"
 
     def __repr__(self):
-        return f"Owner(id={self.id}, name={self.name}, phone={self.phone})"
+        return f"Owner(id={self.person_id}, name={self.name}, phone={self.phone})"
 
 class Vet(Person):
     specialization = Text()
@@ -38,7 +38,7 @@ class Vet(Person):
         inheritance = "CLASS"
 
     def __repr__(self):
-        return f"Vet(id={self.id}, name={self.name}, specialization={self.specialization})"
+        return f"Vet(id={self.person_id}, name={self.name}, specialization={self.specialization})"
 
 class StudentVet(Vet):
     id = Relationship(Vet, r_type="one-to-one", pk=True)
@@ -52,7 +52,7 @@ class StudentVet(Vet):
 class Pet(MiniBase):
     id = Number(pk=True)
     name = Text()
-    owner = Relationship("owners", r_type="many-to-one")
+    owner = Relationship("owners", r_type="many-to-one", cascade_delete=True)
 
     class Meta:
         table_name = "pets"
@@ -64,7 +64,7 @@ class Pet(MiniBase):
 class Visit(MiniBase):
     id = Number(pk=True)
     pet = Relationship("pets", r_type="many-to-one", backref="visits")
-    procedures = Relationship("procedures", r_type="many-to-many", backref="visits")
+    procedures = Relationship("procedures", r_type="many-to-many", backref="visits", cascade_delete=True)
 
     class Meta:
         table_name = "visits"
@@ -75,7 +75,7 @@ class Visit(MiniBase):
 class Procedure(MiniBase):
     id = Number(pk=True)
     name = Text()
-    visits = Relationship("visits", r_type="many-to-many", backref="procedures")
+    visits = Relationship("visits", r_type="many-to-many", backref="procedures", cascade_delete=True)
 
     class Meta:
         table_name = "procedures"
@@ -103,6 +103,26 @@ if __name__ == "__main__":
         session.add(pet)
         # session.commit()
 
+        procedure1 = Procedure(name="Checkup")
+        procedure2 = Procedure(name="Vaccination")
+        session.add(procedure1)
+        session.add(procedure2)
+        
+        visit = Visit(pet=pet)
+        session.add(visit)
+
+        visit.procedures.append(procedure1)
+        visit.procedures.append(procedure2)
+        session.update(visit)
+
+        visit = session.query(Visit).filter(pet=pet.id).first()
+
+        for procedure in visit.procedures:
+            if procedure.name == "Checkup":
+                session.delete(procedure)
+
+        # session.commit()
+
         people = session.query(Person).all()
         for person in people:
             print(person)
@@ -110,6 +130,7 @@ if __name__ == "__main__":
         owners = session.query(Owner).all()
         for owner in owners:
             print(owner)
+            session.delete(owner)
 
         vets = session.query(Vet).all()
         for vet in vets:

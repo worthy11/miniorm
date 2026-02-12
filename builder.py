@@ -46,17 +46,18 @@ class QueryBuilder:
                 m_quoted_table = self._quote(m.table_name)
                 m_select_cols = []
                 for c_name in sorted_cols:
+                    alias = f"{m.table_name}#{c_name}"
                     if c_name in m.columns:
-                        m_select_cols.append(f"{m_quoted_table}.{self._quote(c_name)}")
+                        m_select_cols.append(f"{m_quoted_table}.{self._quote(c_name)} AS {self._quote(alias)}")
                     else:
-                        m_select_cols.append(f"NULL AS {self._quote(c_name)}")
+                        m_select_cols.append(f"NULL AS {self._quote(alias)}")
                 
                 m_select_cols.append(f"'{m.cls.__name__}' AS _concrete_type")
                 union_parts.append(f"SELECT DISTINCT {', '.join(m_select_cols)} FROM {m_quoted_table}")
             
             subquery = " UNION ALL ".join(union_parts)
             table = f"({subquery})"
-            cols = [self._quote(c) for c in sorted_cols] + ["_concrete_type"]
+            cols = [self._quote(f'{mapper.table_name}#{c}') for c in sorted_cols] + ["_concrete_type"]
             filter_prefix = ""
         
         else:
@@ -65,13 +66,13 @@ class QueryBuilder:
             else:
                 local_cols = mapper.columns.keys()
 
-            cols = [f"{table}.{self._quote(c)}" for c in local_cols]
+            cols = [f"{table}.{self._quote(c)} AS {self._quote(f'{table_name}#{c}')}" for c in local_cols]
 
             if mapper.inheritance and mapper.inheritance.strategy.name == "SINGLE":
                 root = mapper
                 while root.parent: root = root.parent
                 if root.discriminator not in local_cols:
-                    cols.append(f"{table}.{self._quote(root.discriminator)}")
+                    cols.append(f"{table}.{self._quote(root.discriminator)} AS {self._quote(f'{table_name}#{root.discriminator}')}")
 
             all_joins = []
 

@@ -131,7 +131,8 @@ class ClassTableInheritance(InheritanceStrategy):
         if mapper.parent:
             operations.update(self.resolve_delete(mapper.parent, entity))
 
-        operations[mapper.table_name] = {mapper.pk: getattr(entity, mapper.pk)}
+        operations[mapper.table_name] = {mapper.pk: getattr(entity, entity._mapper.pk)}
+        print(f"[DEBUG]: Added delete operation for {mapper.table_name}: {operations[mapper.table_name]}")
         return operations
 
     def resolve_target_class(self, mapper, row_dict):
@@ -186,7 +187,7 @@ class ConcreteTableInheritance(InheritanceStrategy):
     
     def resolve_attributes(self, mapper):
         return mapper.columns
-        
+
 
 STRATEGIES = {
     "SINGLE": SingleTableInheritance(),

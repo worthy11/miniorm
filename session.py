@@ -73,6 +73,7 @@ class Session:
                 object.__setattr__(entity, '_orm_state', ObjectState.TRANSIENT)
                 print(f"DEBUG: Cancelled adding object {entity}. Removed from queue.")
             return
+            
         if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
             object.__setattr__(entity, '_orm_state', ObjectState.DELETED)
             dependents = self._collect_cascade_dependents(entity)
@@ -284,10 +285,16 @@ class Session:
         _visited.add(id(entity))
         out = []
         mapper = entity._mapper
+        
         entity_pk = getattr(entity, mapper.pk, None)
         if entity_pk is None:
             return [entity]
-        target_table = mapper.table_name
+
+        # Collect all tables that represent this entity (for CLASS inheritance: parent + child tables)
+        target_tables = {mapper.table_name}
+        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS" and mapper.parent:
+            target_tables.add(mapper.parent.table_name)
+        
         for other_mapper in MiniBase._registry.values():
             if other_mapper.cls is entity.__class__:
                 continue
@@ -298,8 +305,16 @@ class Session:
                     continue
                 if not getattr(rel, '_resolved_target', None):
                     continue
-                if rel._resolved_target._mapper.table_name != target_table:
+                
+                # Check if the FK points to any of the entity's tables
+                # Use remote_table (actual FK target) or resolved target's table
+                fk_target_table = getattr(rel, 'remote_table', None)
+                if not fk_target_table:
+                    fk_target_table = rel._resolved_target._mapper.table_name
+                
+                if fk_target_table not in target_tables:
                     continue
+                
                 fk_name = getattr(rel, '_resolved_fk_name', None)
                 if not fk_name:
                     continue
