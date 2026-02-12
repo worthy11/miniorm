@@ -20,6 +20,7 @@ class Session:
         self._processed_transactions = []
         self._in_flush = False
         self._is_loading = False
+        self._transaction_active = False
 
     def query(self, model_class):
         self._autoflush()
@@ -105,7 +106,9 @@ class Session:
         entities_to_sync = set()
 
         try:
-            self.engine.execute("BEGIN TRANSACTION")
+            if not self._transaction_active:
+                self.engine.execute("BEGIN TRANSACTION")
+                self._transaction_active = True
 
             while self.unit_of_work:
                 transaction = self.unit_of_work.popleft()
@@ -142,11 +145,13 @@ class Session:
                         continue
                     self._flush_m2m(entity)
 
-            self.engine.execute("COMMIT")
+            
             self._processed_transactions = []
 
         except Exception as e:
-            self.engine.execute("ROLLBACK")
+            if self._transaction_active:
+                self.engine.execute("ROLLBACK")
+                self._transaction_active = False
             self.rollback()
             raise RuntimeError(f"Error during flush: {e}")
         finally:
@@ -350,7 +355,9 @@ class Session:
 
     def commit(self):
         self.flush()
-        self.engine.commit()
+        if self._transaction_active:
+            self.engine.execute("COMMIT")
+            self._transaction_active = False
         for obj in list(self.identity_map._map.values()):
             state = getattr(obj, '_orm_state', None)
             if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
@@ -358,6 +365,13 @@ class Session:
                 object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
 
     def rollback(self):
+        if self._transaction_active:
+            try:
+                self.engine.execute("ROLLBACK")
+            except:
+                pass
+            self._transaction_active = False
+            
         to_undo = self._processed_transactions + list(self.unit_of_work)
         
         for transaction in to_undo:

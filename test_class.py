@@ -93,15 +93,15 @@ if __name__ == "__main__":
     with Session(engine) as session:
         owner = Owner(name="John Doe", phone="1234567890", nationality="polish", address="krakow")
         session.add(owner)
-        session.commit()
+        # session.commit()
 
         vet = Vet(name="Jane Smith", specialization="Cardiology")
         session.add(vet)
-        session.commit()
+        # session.commit()
 
         pet = Pet(name="Buddy", owner=owner)
         session.add(pet)
-        session.commit()
+        # session.commit()
 
         people = session.query(Person).all()
         for person in people:
