@@ -47,7 +47,7 @@ class StudentVet(Vet):
 class Pet(MiniBase):
     id = Number(pk=True)
     name = Text()
-    owner = Relationship("people", r_type="many-to-one", cascade_delete=True)
+    owner = Relationship("people", r_type="many-to-one", cascade_delete=True, backref="pets")
 
     class Meta:
         table_name = "pets"
@@ -58,7 +58,7 @@ class Pet(MiniBase):
 
 class Visit(MiniBase):
     id = Number(pk=True)
-    pet = Relationship("pets", r_type="many-to-one", backref="visits")
+    pet = Relationship("pets", r_type="many-to-one", backref="visits", cascade_delete=True)
     procedures = Relationship("procedures", r_type="many-to-many", backref="visits")
 
     class Meta:
@@ -80,39 +80,36 @@ class Procedure(MiniBase):
 
 if __name__ == "__main__":
     run_mapper_tests()
-    engine = DatabaseEngine(db_path="db/test_single.db")
+    engine = DatabaseEngine(db_path="db/test_class.db")
 
     generator = SchemaGenerator()
     generator.create_all(engine, MiniBase._registry)
     
     with Session(engine) as session:
-        owner = Owner(name="John Doe", phone="1234567890", birth_date="2004", bonus_points=10)
+        owner = Owner(name="Kris Kringle", phone="1234567890", birth_date="2004", bonus_points=10)
         session.add(owner)
         # session.commit()
 
-        vet = Vet(name="Jane Smith", specialization="Cardiology", birth_date="2006", bonus_points=30)
+        vet = Vet(name="Boom boom", specialization="Cardiology", birth_date="2006", bonus_points=30)
         session.add(vet)
         # session.commit()
 
-        pet = Pet(name="Buddy", owner=owner)
+        pet = Pet(name="Rex", owner=owner)
         session.add(pet)
-        # session.commit()
+
+        session.commit()
 
         people = session.query(Person).all()
         for person in people:
             print(person)
 
-        # owners = session.query(Owner).all()
-        # for owner in owners:
-        #     print(owner)
-        #     session.delete(owner)
+        owners = session.query(Owner).all()
+        for owner in owners:
+            print(owner)
 
         vets = session.query(Vet).all()
         for vet in vets:
             print(vet)
-            vet.name = "Bim bam bom"
-            vet.specialization = "ABCDEFG"
-            session.update(vet)
 
         pets = session.query(Pet).all()
         for pet in pets:

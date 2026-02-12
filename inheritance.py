@@ -77,7 +77,22 @@ class SingleTableInheritance(InheritanceStrategy):
     def resolve_delete(self, mapper, entity):
         """Return operations dict: _m2m_cleanup list + table_name -> pk_value for each delete."""
         operations = {}
-        operations[mapper.table_name] = {mapper.pk: getattr(entity, mapper.pk)}
+        pk_val = getattr(entity, mapper.pk)
+        
+        m2m_cleanup = []
+        for name, rel in mapper.relationships.items():
+            if rel.r_type == "many-to-many" and rel.association_table:
+                assoc = rel.association_table
+                m2m_cleanup.append({
+                    "assoc_table": assoc.name,
+                    "pk_val": pk_val,
+                    "local_key": assoc.local_key,
+                })
+        
+        if m2m_cleanup:
+            operations["_m2m_cleanup"] = m2m_cleanup
+        
+        operations[mapper.table_name] = {mapper.pk: pk_val}
         return operations
 
     def resolve_target_class(self, mapper, row_dict):
@@ -129,10 +144,27 @@ class ClassTableInheritance(InheritanceStrategy):
         operations = {}
 
         if mapper.parent:
-            operations.update(self.resolve_delete(mapper.parent, entity))
+            parent_ops = self.resolve_delete(mapper.parent, entity)
+            if "_m2m_cleanup" in parent_ops:
+                operations["_m2m_cleanup"] = parent_ops.pop("_m2m_cleanup")
+            operations.update(parent_ops)
 
-        operations[mapper.table_name] = {mapper.pk: getattr(entity, entity._mapper.pk)}
-        print(f"[DEBUG]: Added delete operation for {mapper.table_name}: {operations[mapper.table_name]}")
+        pk_val = getattr(entity, mapper.pk)
+        
+        m2m_cleanup = operations.get("_m2m_cleanup", [])
+        for name, rel in mapper.relationships.items():
+            if rel.r_type == "many-to-many" and rel.association_table:
+                assoc = rel.association_table
+                m2m_cleanup.append({
+                    "assoc_table": assoc.name,
+                    "pk_val": pk_val,
+                    "local_key": assoc.local_key,
+                })
+        
+        if m2m_cleanup:
+            operations["_m2m_cleanup"] = m2m_cleanup
+
+        operations[mapper.table_name] = {mapper.pk: pk_val}
         return operations
 
     def resolve_target_class(self, mapper, row_dict):
@@ -173,7 +205,22 @@ class ConcreteTableInheritance(InheritanceStrategy):
 
     def resolve_delete(self, mapper, entity):
         operations = {}
-        operations[mapper.table_name] = {mapper.pk: getattr(entity, mapper.pk)}
+        pk_val = getattr(entity, mapper.pk)
+        
+        m2m_cleanup = []
+        for name, rel in mapper.relationships.items():
+            if rel.r_type == "many-to-many" and rel.association_table:
+                assoc = rel.association_table
+                m2m_cleanup.append({
+                    "assoc_table": assoc.name,
+                    "pk_val": pk_val,
+                    "local_key": assoc.local_key,
+                })
+        
+        if m2m_cleanup:
+            operations["_m2m_cleanup"] = m2m_cleanup
+        
+        operations[mapper.table_name] = {mapper.pk: pk_val}
         return operations
 
     def resolve_target_class(self, mapper, row_dict):

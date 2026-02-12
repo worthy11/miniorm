@@ -63,7 +63,7 @@ class Pet(MiniBase):
 
 class Visit(MiniBase):
     id = Number(pk=True)
-    pet = Relationship("pets", r_type="many-to-one", backref="visits")
+    pet = Relationship("pets", r_type="many-to-one", backref="visits", cascade_delete=True)
     procedures = Relationship("procedures", r_type="many-to-many", backref="visits", cascade_delete=True)
 
     class Meta:
@@ -91,37 +91,14 @@ if __name__ == "__main__":
     generator.create_all(engine, MiniBase._registry)
     
     with Session(engine) as session:
-        owner = Owner(name="John Doe", phone="1234567890", nationality="polish", address="krakow")
+        owner = Owner(name="John Doe", phone="1234567890")
         session.add(owner)
-        # session.commit()
-
-        vet = Vet(name="Jane Smith", specialization="Cardiology")
-        session.add(vet)
-        # session.commit()
 
         pet = Pet(name="Buddy", owner=owner)
         session.add(pet)
-        # session.commit()
 
-        procedure1 = Procedure(name="Checkup")
-        procedure2 = Procedure(name="Vaccination")
-        session.add(procedure1)
-        session.add(procedure2)
-        
         visit = Visit(pet=pet)
         session.add(visit)
-
-        visit.procedures.append(procedure1)
-        visit.procedures.append(procedure2)
-        session.update(visit)
-
-        visit = session.query(Visit).filter(pet=pet.id).first()
-
-        for procedure in visit.procedures:
-            if procedure.name == "Checkup":
-                session.delete(procedure)
-
-        # session.commit()
 
         people = session.query(Person).all()
         for person in people:
@@ -130,7 +107,7 @@ if __name__ == "__main__":
         owners = session.query(Owner).all()
         for owner in owners:
             print(owner)
-            session.delete(owner)
+        session.commit()
 
         vets = session.query(Vet).all()
         for vet in vets:

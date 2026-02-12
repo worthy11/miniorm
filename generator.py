@@ -15,7 +15,7 @@ class SchemaGenerator:
     def _get_existing_columns(self, engine, table_name):
         rows = engine.execute(f"PRAGMA table_info({self._quote(table_name)})")
         return [row[1] for row in rows]
-    
+
     def create_all(self, engine, registry):
         table_definitions = {}
         

@@ -17,11 +17,11 @@ class Relationship:
         self.pk = pk
         self.backref = backref
         self.cascade_delete = cascade_delete
-        self.local_table = None   # table that declares this relationship (resolved by mapper)
-        self.remote_table = None  # target table (resolved by mapper)
+        self.local_table = None
+        self.remote_table = None
         self._resolved_target = None
         self._resolved_fk_name = None
-        self.association_table = None  # AssociationTable for many-to-many (set by mapper)
+        self.association_table = None
 
     def __repr__(self):
         target = getattr(self._resolved_target, "__name__", self.target_table)

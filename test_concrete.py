@@ -7,7 +7,7 @@ from test_utils import run_mapper_tests
 
 class Person(MiniBase):
     id = Number(pk=True)
-    name = Text()
+    name = Text(nullable=False)
     # age = Text()
 
     class Meta:
@@ -42,7 +42,7 @@ class Vet(Person):
 class Pet(MiniBase):
     id = Number(pk=True)
     name = Text()
-    owner = Relationship("owners", r_type="many-to-one")
+    owner = Relationship("owners", r_type="many-to-one", cascade_delete=True)
 
     class Meta:
         table_name = "pets"
@@ -56,7 +56,7 @@ class Pet(MiniBase):
 
 class Visit(MiniBase):
     id = Number(pk=True)
-    pet = Relationship("pets", r_type="many-to-one", backref="visits")
+    pet = Relationship("pets", r_type="many-to-one", backref="visits", cascade_delete=True)
     procedures = Relationship("procedures", r_type="many-to-many", backref="visits")
 
     class Meta:
@@ -78,7 +78,7 @@ class Procedure(MiniBase):
 
 if __name__ == "__main__":
     run_mapper_tests()
-    engine = DatabaseEngine(db_path="db/test_concrete.db")
+    engine = DatabaseEngine(db_path="db/test_class.db")
 
     generator = SchemaGenerator()
     generator.create_all(engine, MiniBase._registry)
@@ -102,6 +102,8 @@ if __name__ == "__main__":
         owners = session.query(Owner).all()
         for owner in owners:
             print(owner)
+            # session.delete(owner)
+        session.commit()
 
         vets = session.query(Vet).all()
         for vet in vets:
@@ -121,9 +123,9 @@ if __name__ == "__main__":
             print(procedure)
 
 
-        print("\n--- TEST MIGRACJI (ALTER TABLE) ---")
-        pets = session.query(Pet).all()
-        for p in pets:
-            # Stare rekordy będą miały species=None
-            # Nowy rekord (Rex) będzie miał species='Dog'
-            print(f"Pet: {p.name}, Species: {getattr(p, 'species', 'N/A')}")
+        # print("\n--- TEST MIGRACJI (ALTER TABLE) ---")
+        # pets = session.query(Pet).all()
+        # for p in pets:
+        #     # Stare rekordy będą miały species=None
+        #     # Nowy rekord (Rex) będzie miał species='Dog'
+        #     print(f"Pet: {p.name}, Species: {getattr(p, 'species', 'N/A')}")

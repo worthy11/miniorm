@@ -51,7 +51,10 @@ class MiniBase:
         session = object.__getattribute__(self, '_session')
 
         if name == mapper.pk:
-            return object.__getattribute__(self, name)
+            val = object.__getattribute__(self, name)
+            if isinstance(val, Column):
+                return self.__dict__.get(name, None)
+            return val
 
         if name in mapper.relationships:
             rel = mapper.relationships[name]

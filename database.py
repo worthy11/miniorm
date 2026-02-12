@@ -25,7 +25,6 @@ class DatabaseEngine:
                 else:
                     clean_params.append(p)
 
-        self._log(sql, clean_params if clean_params else params)
         cursor = self.connection.cursor()
         cursor.execute(sql, tuple(clean_params) if clean_params else (params or ()))
         
