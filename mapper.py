@@ -241,18 +241,17 @@ class Mapper:
     
     def hydrate(self, row_dict):
         target_cls = self.inheritance.strategy.resolve_target_class(self, row_dict)
+        attributes = self.inheritance.strategy.resolve_attributes(self)
         obj = target_cls()
         target_mapper = target_cls._mapper
 
         for key, value in row_dict.items():
-            if "#" not in key:
-                object.__setattr__(obj, key, value)
-            else:
-                parts = key.split("#", 1)
-                if len(parts) == 2:
-                    table_prefix, col_name = parts
-                    if table_prefix == target_mapper.table_name:
-                        object.__setattr__(obj, col_name, value)
+            if value is not None:
+                if "#" not in key:
+                    object.__setattr__(obj, key, value)
+                else:
+                    table_name, col_name = key.split("#")
+                    object.__setattr__(obj, col_name, value)
 
         return obj
     
