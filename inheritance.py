@@ -32,6 +32,11 @@ class InheritanceStrategy(ABC):
         """Return the model class to instantiate for this row (for hydration)."""
         pass
 
+    @abstractmethod
+    def resolve_attributes(self, mapper):
+        pass
+
+
 class SingleTableInheritance(InheritanceStrategy):
     name = "SINGLE"
 
@@ -84,6 +89,12 @@ class SingleTableInheritance(InheritanceStrategy):
             return root.discriminator_map[disc_val]
         return mapper.cls
 
+    def resolve_attributes(self, mapper):
+        attrs = mapper.columns
+        if mapper.parent:
+            attrs = dict(mapper.parent.columns) | attrs
+        return attrs
+
 class ClassTableInheritance(InheritanceStrategy):
     name = "CLASS"
 
@@ -132,6 +143,12 @@ class ClassTableInheritance(InheritanceStrategy):
                     return child_cls
         return mapper.cls
 
+    def resolve_attributes(self, mapper):
+        attrs = mapper.columns
+        if mapper.parent:
+            attrs = self.resolve_attributes(mapper.parent) | attrs
+        return attrs
+
 class ConcreteTableInheritance(InheritanceStrategy):
     name = "CONCRETE"
 
@@ -167,7 +184,10 @@ class ConcreteTableInheritance(InheritanceStrategy):
                         return child_cls
         return mapper.cls
     
-    
+    def resolve_attributes(self, mapper):
+        return mapper.columns
+        
+
 STRATEGIES = {
     "SINGLE": SingleTableInheritance(),
     "CLASS": ClassTableInheritance(),
