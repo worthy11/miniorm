@@ -9,7 +9,7 @@ router = APIRouter()
 class ProcedureCreate(BaseModel):
     name: str
     description: str = ""
-    price: float = 0
+    price: float | None = None
 
 class ProcedureUpdate(BaseModel):
     name: str | None = None
@@ -42,8 +42,13 @@ def get_procedures(
     description: str = Query(None),
     price_min: float = Query(None),
     price_max: float = Query(None),
+    order_by: str = Query(None),
+    order_dir: str = Query("ASC"),
 ):
-    procs = session.query(Procedure).all()
+    q = session.query(Procedure)
+    if order_by and order_by in ("procedure_id", "name", "description", "price"):
+        q = q.order_by(order_by, order_dir or "ASC")
+    procs = q.all()
     procs = _apply_procedure_filters(procs, name, description, price_min, price_max)
     return [
         {"procedure_id": p.procedure_id, "name": p.name, "description": p.description, "price": p.price}
@@ -52,7 +57,10 @@ def get_procedures(
 
 @router.post("/api/procedures")
 def add_procedure(proc: ProcedureCreate, session: Session = Depends(get_session)):
-    new_proc = Procedure(name=proc.name, description=proc.description, price=proc.price)
+    kwargs = {"name": proc.name, "description": proc.description or ""}
+    if proc.price is not None:
+        kwargs["price"] = proc.price
+    new_proc = Procedure(**kwargs)
     session.add(new_proc)
     session.commit()
     return {

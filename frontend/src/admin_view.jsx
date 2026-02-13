@@ -15,22 +15,35 @@ export default function AdminView() {
   const [message, setMessage] = useState("");
   const [editModal, setEditModal] = useState(null);
   const [form, setForm] = useState({});
-  const [sort, setSort] = useState({ column: "", direction: "ASC" });
+  const [sortByTab, setSortByTab] = useState(() =>
+    Object.fromEntries(TABS.map((t) => [t, { column: "", direction: "ASC" }])),
+  );
+
+  const sort = sortByTab[activeTab] ?? { column: "", direction: "ASC" };
+  const setSort = (updater) =>
+    setSortByTab((s) => ({
+      ...s,
+      [activeTab]:
+        typeof updater === "function"
+          ? updater(s[activeTab] ?? { column: "", direction: "ASC" })
+          : updater,
+    }));
 
   useEffect(() => {
     fetchData();
-  }, [activeTab, filters]);
+  }, [activeTab, filters, sortByTab]);
 
   async function fetchData() {
+    const s = sortByTab[activeTab] ?? { column: "", direction: "ASC" };
     const setParams = (keys) => {
       const q = new URLSearchParams();
       keys.forEach((k) => {
         if (filters[k] != null && filters[k] !== "") q.set(k, filters[k]);
       });
-      if (sort.column) {
-      q.set("order_by", sort.column);
-      q.set("order_dir", sort.direction);
-    }
+      if (s.column) {
+        q.set("order_by", s.column);
+        q.set("order_dir", s.direction);
+      }
       return q.toString();
     };
     if (activeTab === "owners") {
@@ -61,10 +74,11 @@ export default function AdminView() {
     }
   }
 
-  // Load owners/vets for dropdowns
+  // Load owners/vets/pets/procedures for dropdowns
   const [ownersList, setOwnersList] = useState([]);
   const [vetsList, setVetsList] = useState([]);
   const [petsList, setPetsList] = useState([]);
+  const [proceduresList, setProceduresList] = useState([]);
 
   useEffect(() => {
     fetch("/api/owners")
@@ -76,6 +90,9 @@ export default function AdminView() {
     fetch("/api/pets")
       .then((r) => r.json())
       .then(setPetsList);
+    fetch("/api/procedures")
+      .then((r) => r.json())
+      .then(setProceduresList);
   }, [activeTab]);
 
   function handleChange(e) {
@@ -133,10 +150,16 @@ export default function AdminView() {
         res = await fetch("/api/procedures", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...form, price: parseFloat(form.price || 0) }),
+          body: JSON.stringify({
+            ...form,
+            price:
+              form.price !== "" && form.price != null
+                ? parseFloat(form.price)
+                : undefined,
+          }),
         });
       }
-      const data = await res.json();
+    const data = await res.json();
       if (res.ok) {
         showMessage("Added successfully!");
         setForm({});
@@ -212,6 +235,70 @@ export default function AdminView() {
     }
   }
 
+  async function addProcedureToVisit(visitId, procedureId) {
+    try {
+      const res = await fetch(`/api/visits/${visitId}/procedures`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ procedure_id: procedureId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setForm((f) => ({
+          ...f,
+          procedure_ids: data.procedure_ids || [
+            ...(f.procedure_ids || []),
+            procedureId,
+          ],
+        }));
+        setVisits((prev) =>
+          prev.map((v) =>
+            v.visit_id === visitId
+              ? { ...v, procedure_ids: data.procedure_ids }
+              : v,
+          ),
+        );
+        showMessage("Procedure added");
+      } else {
+        showMessage(data.detail || "Error");
+      }
+    } catch (err) {
+      showMessage("Error: " + err.message);
+    }
+  }
+
+  async function removeProcedureFromVisit(visitId, procedureId) {
+    try {
+      const res = await fetch(
+        `/api/visits/${visitId}/procedures/${procedureId}`,
+        {
+          method: "DELETE",
+        },
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setForm((f) => ({
+          ...f,
+          procedure_ids: (f.procedure_ids || []).filter(
+            (id) => id !== procedureId,
+          ),
+        }));
+        setVisits((prev) =>
+          prev.map((v) =>
+            v.visit_id === visitId
+              ? { ...v, procedure_ids: data.procedure_ids }
+              : v,
+          ),
+        );
+        showMessage("Procedure removed");
+      } else {
+        showMessage(data.detail || "Error");
+      }
+    } catch (err) {
+      showMessage("Error: " + err.message);
+    }
+  }
+
   async function handleDelete(entity, id) {
     if (!confirm("Delete this record?")) return;
     setMessage("");
@@ -264,6 +351,7 @@ export default function AdminView() {
         date: row.date,
         reason: row.reason,
         paid: row.paid,
+        procedure_ids: row.procedure_ids || [],
       });
       setEditModal({ entity, idKey: "visit_id", id: row.visit_id });
     } else if (entity === "procedures") {
@@ -327,24 +415,31 @@ export default function AdminView() {
                 value={filters.phone || ""}
                 onChange={handleFilterChange}
               />
-              <select name="order_by" value={sort.column} onChange={(e) => setSort(s => ({...s, column: e.target.value}))}>
-                <option value="">Sort by (None)</option>
-                <option value="last_name">Last Name</option>
-                <option value="first_name">First Name</option>
-                <option value="email">Email</option>
-                <option value="person_id">ID</option>
-              </select>
-
-              <select 
-                name="order_dir" 
-                value={sort.direction} 
-                onChange={(e) => setSort(s => ({...s, direction: e.target.value}))}
+              <select
+                name="order_by"
+                value={sort.column}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, column: e.target.value }))
+                }
               >
-                <option value="ASC">Ascending</option>
-                <option value="DESC">Descending</option>
+                <option value="">Sort by</option>
+                <option value="owner_id">ID</option>
+                <option value="first_name">First name</option>
+                <option value="last_name">Last name</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
               </select>
-
-              <button onClick={fetchData}>Apply & Sort</button>
+              <select
+                name="order_dir"
+                value={sort.direction}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, direction: e.target.value }))
+                }
+              >
+                <option value="ASC">Asc</option>
+                <option value="DESC">Desc</option>
+              </select>
+              <button onClick={fetchData}>Apply</button>
             </div>
             <form onSubmit={handleAdd} className="pet-form">
               <input
@@ -431,7 +526,7 @@ export default function AdminView() {
 
         {/* Vets */}
         {activeTab === "vets" && (
-          <div className="dashboard-section">
+        <div className="dashboard-section">
             <h3>Vets</h3>
             <div className="admin-filters">
               <input
@@ -464,6 +559,31 @@ export default function AdminView() {
                 value={filters.license || ""}
                 onChange={handleFilterChange}
               />
+              <select
+                name="order_by"
+                value={sort.column}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, column: e.target.value }))
+                }
+              >
+                <option value="">Sort by</option>
+                <option value="vet_id">ID</option>
+                <option value="first_name">First name</option>
+                <option value="last_name">Last name</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="license">License</option>
+              </select>
+              <select
+                name="order_dir"
+                value={sort.direction}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, direction: e.target.value }))
+                }
+              >
+                <option value="ASC">Asc</option>
+                <option value="DESC">Desc</option>
+              </select>
               <button onClick={fetchData}>Apply</button>
             </div>
             <form onSubmit={handleAdd} className="pet-form">
@@ -502,8 +622,8 @@ export default function AdminView() {
                 placeholder="License"
                 required
               />
-              <button type="submit">Add Vet</button>
-            </form>
+            <button type="submit">Add Vet</button>
+          </form>
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
@@ -591,6 +711,31 @@ export default function AdminView() {
                 value={filters.birth_date || ""}
                 onChange={handleFilterChange}
               />
+              <select
+                name="order_by"
+                value={sort.column}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, column: e.target.value }))
+                }
+              >
+                <option value="">Sort by</option>
+                <option value="pet_id">ID</option>
+                <option value="owner_id">Owner</option>
+                <option value="name">Name</option>
+                <option value="species">Species</option>
+                <option value="breed">Breed</option>
+                <option value="birth_date">Birth date</option>
+              </select>
+              <select
+                name="order_dir"
+                value={sort.direction}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, direction: e.target.value }))
+                }
+              >
+                <option value="ASC">Asc</option>
+                <option value="DESC">Desc</option>
+              </select>
               <button onClick={fetchData}>Apply</button>
             </div>
             <form onSubmit={handleAdd} className="pet-form">
@@ -687,12 +832,12 @@ export default function AdminView() {
                 </tbody>
               </table>
             </div>
-          </div>
+        </div>
         )}
 
         {/* Visits */}
         {activeTab === "visits" && (
-          <div className="dashboard-section">
+        <div className="dashboard-section">
             <h3>Visits</h3>
             <div className="admin-filters">
               <select
@@ -751,6 +896,31 @@ export default function AdminView() {
                 <option value="">Paid (any)</option>
                 <option value="0">No</option>
                 <option value="1">Yes</option>
+              </select>
+              <select
+                name="order_by"
+                value={sort.column}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, column: e.target.value }))
+                }
+              >
+                <option value="">Sort by</option>
+                <option value="visit_id">ID</option>
+                <option value="pet_id">Pet</option>
+                <option value="vet_id">Vet</option>
+                <option value="date">Date</option>
+                <option value="reason">Reason</option>
+                <option value="paid">Paid</option>
+              </select>
+              <select
+                name="order_dir"
+                value={sort.direction}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, direction: e.target.value }))
+                }
+              >
+                <option value="ASC">Asc</option>
+                <option value="DESC">Desc</option>
               </select>
               <button onClick={fetchData}>Apply</button>
             </div>
@@ -816,6 +986,7 @@ export default function AdminView() {
                     <th>Date</th>
                     <th>Reason</th>
                     <th>Paid</th>
+                    <th>Procedures</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -837,6 +1008,15 @@ export default function AdminView() {
                       <td>{v.reason}</td>
                       <td>{v.paid ? "Yes" : "No"}</td>
                       <td>
+                        {(v.procedure_ids || [])
+                          .map(
+                            (pid) =>
+                              proceduresList.find((p) => p.procedure_id === pid)
+                                ?.name || `#${pid}`,
+                          )
+                          .join(", ") || "—"}
+                      </td>
+                      <td>
                         <button
                           type="button"
                           className="btn-edit"
@@ -857,12 +1037,12 @@ export default function AdminView() {
                 </tbody>
               </table>
             </div>
-          </div>
+        </div>
         )}
 
         {/* Procedures */}
         {activeTab === "procedures" && (
-          <div className="dashboard-section">
+        <div className="dashboard-section">
             <h3>Procedures</h3>
             <div className="admin-filters">
               <input
@@ -893,6 +1073,29 @@ export default function AdminView() {
                 value={filters.price_max ?? ""}
                 onChange={handleFilterChange}
               />
+              <select
+                name="order_by"
+                value={sort.column}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, column: e.target.value }))
+                }
+              >
+                <option value="">Sort by</option>
+                <option value="procedure_id">ID</option>
+                <option value="name">Name</option>
+                <option value="description">Description</option>
+                <option value="price">Price</option>
+              </select>
+              <select
+                name="order_dir"
+                value={sort.direction}
+                onChange={(e) =>
+                  setSort((s) => ({ ...s, direction: e.target.value }))
+                }
+              >
+                <option value="ASC">Asc</option>
+                <option value="DESC">Desc</option>
+              </select>
               <button onClick={fetchData}>Apply</button>
             </div>
             <form onSubmit={handleAdd} className="pet-form">
@@ -915,7 +1118,7 @@ export default function AdminView() {
                 step="0.01"
                 value={form.price ?? ""}
                 onChange={handleChange}
-                placeholder="Price"
+                placeholder="Price (default: 50)"
               />
               <button type="submit">Add Procedure</button>
             </form>
@@ -1146,6 +1349,66 @@ export default function AdminView() {
                     onChange={handleChange}
                     placeholder="Paid (0/1)"
                   />
+                  <div className="admin-visit-procedures">
+                    <label>Procedures</label>
+                    <ul>
+                      {(form.procedure_ids || []).map((pid) => {
+                        const proc = proceduresList.find(
+                          (p) => p.procedure_id === pid,
+                        );
+                        return (
+                          <li key={pid}>
+                            {proc ? proc.name : `#${pid}`}
+                            <button
+                              type="button"
+                              className="btn-remove-small"
+                              onClick={() =>
+                                removeProcedureFromVisit(editModal.id, pid)
+                              }
+                            >
+                              Remove
+                            </button>
+              </li>
+                        );
+                      })}
+                    </ul>
+                    <div className="admin-add-procedure">
+                      <select
+                        value={form._addProcedure ?? ""}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            _addProcedure: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Add procedure...</option>
+                        {proceduresList
+                          .filter(
+                            (p) =>
+                              !(form.procedure_ids || []).includes(
+                                p.procedure_id,
+                              ),
+                          )
+                          .map((p) => (
+                            <option key={p.procedure_id} value={p.procedure_id}>
+                              {p.name}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const pid = parseInt(form._addProcedure, 10);
+                          if (pid && editModal.id)
+                            addProcedureToVisit(editModal.id, pid);
+                          setForm((f) => ({ ...f, _addProcedure: "" }));
+                        }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
                 </>
               )}
               {editModal.entity === "procedures" && (

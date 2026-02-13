@@ -377,6 +377,7 @@ class Session:
                 self._take_snapshot(obj)
                 object.__setattr__(obj, '_orm_state', ObjectState.EXPIRED)
 
+
     def rollback(self):
         if self._transaction_active:
             try:

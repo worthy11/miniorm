@@ -34,14 +34,20 @@ def get_visits(
     date: str = Query(None),
     reason: str = Query(None),
     paid: int = Query(None),
+    order_by: str = Query(None),
+    order_dir: str = Query("ASC"),
 ):
+    q = session.query(Visit)
+    if order_by and order_by in ("visit_id", "pet_id", "vet_id", "date", "reason", "paid"):
+        col = "pet" if order_by == "pet_id" else ("vet" if order_by == "vet_id" else order_by)
+        q = q.order_by(col, order_dir or "ASC")
     if owner_id is not None:
         pets = session.query(Pet).filter(owner=owner_id).all()
         pet_ids = [p.pet_id for p in pets]
-        all_visits = session.query(Visit).all()
+        all_visits = q.all()
         visits = [v for v in all_visits if v.pet and v.pet.pet_id in pet_ids]
     else:
-        visits = session.query(Visit).all()
+        visits = q.all()
     if vet_id is not None:
         visits = [v for v in visits if v.vet and v.vet.person_id == vet_id]
     if pet_id is not None:
@@ -55,7 +61,7 @@ def get_visits(
             "date": v.date,
             "reason": v.reason,
             "paid": v.paid,
-            "procedure": v.procedures[0].procedure_id if getattr(v, "procedures", None) else None
+            "procedure_ids": [p.procedure_id for p in (getattr(v, "procedures", None) or [])]
         }
         for v in visits
     ]
@@ -131,6 +137,39 @@ def update_visit(visit_id: int, visit: VisitUpdate, session: Session = Depends(g
         "paid": existing.paid,
         "message": "Visit updated"
     }
+
+class AddProcedureBody(BaseModel):
+    procedure_id: int
+
+@router.post("/api/visits/{visit_id}/procedures")
+def add_procedure_to_visit(visit_id: int, body: AddProcedureBody, session: Session = Depends(get_session)):
+    procedure_id = body.procedure_id
+    visit = session.get(Visit, visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    proc = session.get(Procedure, procedure_id)
+    if not proc:
+        raise HTTPException(status_code=404, detail="Procedure not found")
+    procs = getattr(visit, "procedures", None) or []
+    if proc in procs:
+        return {"message": "Procedure already on visit", "procedure_ids": [p.procedure_id for p in procs]}
+    procs = list(procs) + [proc]
+    setattr(visit, "procedures", procs)
+    session.update(visit)
+    session.commit()
+    return {"message": "Procedure added", "procedure_ids": [p.procedure_id for p in procs]}
+
+@router.delete("/api/visits/{visit_id}/procedures/{procedure_id}")
+def remove_procedure_from_visit(visit_id: int, procedure_id: int, session: Session = Depends(get_session)):
+    visit = session.get(Visit, visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    procs = getattr(visit, "procedures", None) or []
+    procs = [p for p in procs if p.procedure_id != procedure_id]
+    setattr(visit, "procedures", procs)
+    session.update(visit)
+    session.commit()
+    return {"message": "Procedure removed", "procedure_ids": [p.procedure_id for p in procs]}
 
 @router.delete("/api/visits/{visit_id}")
 def delete_visit(visit_id: int, session: Session = Depends(get_session)):

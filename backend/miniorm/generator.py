@@ -22,6 +22,8 @@ class SchemaGenerator:
         m2m_tables = set()
 
         for mapper in registry.values():
+            if mapper.abstract:
+                continue
             if mapper.inheritance.strategy.name == "CONCRETE" and getattr(mapper, 'children', None):
                 continue
             name = mapper.table_name
@@ -59,6 +61,8 @@ class SchemaGenerator:
 
         table_definitions = {}
         for mapper in registry.values():
+            if mapper.abstract:
+                continue
             if mapper.inheritance.strategy.name == "CONCRETE" and getattr(mapper, 'children', None):
                 continue
             name = mapper.table_name
@@ -78,13 +82,20 @@ class SchemaGenerator:
             sql = self._generate_sql(t_name, info)
             engine.execute(sql)
             existing_cols = self._get_existing_columns(engine, t_name)
+            expected_cols = set(info['columns'].keys())
             for col_name, col_obj in info['columns'].items():
                 if col_name not in existing_cols:
                     print(f"DEBUG: Migration: Adding missing column '{col_name}' to table '{t_name}'")
                     sql_type = self.TYPE_MAP.get(col_obj.dtype, "TEXT")
-                    
                     alter_sql = f"ALTER TABLE {self._quote(t_name)} ADD COLUMN {self._quote(col_name)} {sql_type} NULL"
                     engine.execute(alter_sql)
+            for col_name in existing_cols:
+                if col_name not in expected_cols:
+                    try:
+                        engine.execute(f"ALTER TABLE {self._quote(t_name)} DROP COLUMN {self._quote(col_name)}")
+                        print(f"DEBUG: Migration: Dropped unused column '{col_name}' from table '{t_name}'")
+                    except Exception as e:
+                        print(f"DEBUG: Could not drop column '{col_name}' from {t_name}: {e}")
             print(f"DEBUG: Created table: {t_name}")
 
         created_m2m = set()
@@ -143,7 +154,7 @@ class SchemaGenerator:
         l_key = self._quote(assoc.local_key)
         r_key = self._quote(assoc.remote_key)
         target_pk = rel._resolved_target._mapper.pk
-        local_pk = rel.local_table_pk if hasattr(rel, 'local_table_pk') else "id"
+        local_pk = getattr(rel, 'local_table_pk', None) or "id"
         return f"""
         CREATE TABLE IF NOT EXISTS {table} (
             {l_key} INTEGER,

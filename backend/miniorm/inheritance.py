@@ -43,7 +43,6 @@ class SingleTableInheritance(InheritanceStrategy):
     def resolve_columns(self, mapper):
         if mapper.parent:
             mapper.columns = dict(mapper.parent.columns) | mapper.columns
-        # TODO: Require discriminator column to be present in the parent
         mapper.columns[mapper.discriminator] = Text(nullable=False)
 
     def resolve_table_name(self, mapper):

@@ -34,8 +34,14 @@ def get_vets(
     email: str = Query(None),
     phone: str = Query(None),
     license: str = Query(None, alias="license"),
+    order_by: str = Query(None),
+    order_dir: str = Query("ASC"),
 ):
-    vets = session.query(Vet).all()
+    q = session.query(Vet)
+    if order_by and order_by in ("vet_id", "first_name", "last_name", "email", "phone", "license"):
+        col = "person_id" if order_by == "vet_id" else order_by
+        q = q.order_by(col, order_dir or "ASC")
+    vets = q.all()
     vets = _apply_vet_filters(vets, first_name, last_name, email, phone, license)
     return [
         {

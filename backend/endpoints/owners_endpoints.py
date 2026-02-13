@@ -55,7 +55,11 @@ def get_owners(
     order_by: str = Query(None),
     order_dir: str = Query("ASC"),
 ):
-    owners = session.query(Owner).all()
+    q = session.query(Owner)
+    if order_by and order_by in ("owner_id", "first_name", "last_name", "email", "phone"):
+        col = "person_id" if order_by == "owner_id" else order_by
+        q = q.order_by(col, order_dir or "ASC")
+    owners = q.all()
     owners = _apply_owner_filters(owners, first_name, last_name, email, phone)
     return [
         {

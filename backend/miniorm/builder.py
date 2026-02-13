@@ -22,12 +22,12 @@ class QueryBuilder:
     def build_select(self, mapper, filters, limit=None, offset=None, joins=None, order_by=None):
         table_name = mapper.table_name
         table = self._quote(table_name)
+        order_by_prefix = table_name
 
         params = []
         filter_prefix = table
 
         if mapper.inheritance and mapper.inheritance.strategy.name == "CONCRETE" and not mapper.parent and mapper.children:
-            # Only descendant tables (no parent table) for concrete inheritance
             def _concrete_descendant_mappers(m):
                 out = []
                 for child_cls in m.children:
@@ -57,6 +57,7 @@ class QueryBuilder:
             
             subquery = " UNION ALL ".join(union_parts)
             table = f"({subquery})"
+            order_by_prefix = all_mappers[0].table_name if all_mappers else table_name
             cols = [self._quote(f'{mapper.table_name}#{c}') for c in sorted_cols] + ["_concrete_type"]
             filter_prefix = ""
         
@@ -141,14 +142,15 @@ class QueryBuilder:
         if actual_filters:
             where_parts = []
             for col, val in actual_filters.items():
-                target_prefix = table 
-                
-                if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
-                    if col not in mapper.declared_columns and mapper.parent:
-                        if col in mapper.parent.columns:
-                            target_prefix = self._quote(mapper.parent.table_name)
-                
-                quoted_col = f"{target_prefix}.{self._quote(col)}" if target_prefix else self._quote(col)
+                if "(" in table:
+                    quoted_col = self._quote(f"{table_name}#{col}")
+                else:
+                    target_prefix = table
+                    if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+                        if col not in mapper.declared_columns and mapper.parent:
+                            if col in mapper.parent.columns:
+                                target_prefix = self._quote(mapper.parent.table_name)
+                    quoted_col = f"{target_prefix}.{self._quote(col)}" if target_prefix else self._quote(col)
 
                 if val is None:
                     where_parts.append(f"{quoted_col} IS NULL")
@@ -158,8 +160,16 @@ class QueryBuilder:
             sql += " WHERE " + " AND ".join(where_parts)
 
         if order_by:
-            order_clauses = [f'"{col}" {dir}' for col, dir in order_by]
-            sql += f' ORDER BY {", ".join(order_clauses)}'
+            order_clauses = []
+            for col, dir in order_by:
+                if mapper.inheritance and mapper.inheritance.strategy.name == "CONCRETE" and not mapper.parent and mapper.children:
+                    ref = self._quote(f"{order_by_prefix}#{col}")
+                elif "(" in table:
+                    ref = self._quote(f"{order_by_prefix}#{col}")
+                else:
+                    ref = f"{table}.{self._quote(col)}"
+                order_clauses.append(f"{ref} {dir}")
+            sql += " ORDER BY " + ", ".join(order_clauses)
         
         if limit is not None:
             sql += f" LIMIT {int(limit)}"

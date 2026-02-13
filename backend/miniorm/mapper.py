@@ -124,6 +124,8 @@ class Mapper:
             remote_key = f"{target_mapper.table_name.rstrip('s')}_id"
             rel.local_table = self.table_name
             rel.remote_table = target_mapper.table_name
+            rel.local_table_pk = self.pk
+            rel.remote_table_pk = target_mapper.pk
 
             rel.association_table = AssociationTable(
                 name=table_name, local_key=local_key, remote_key=remote_key,
@@ -144,6 +146,8 @@ class Mapper:
                 )
                 reverse_rel._resolved_local_key = remote_key
                 reverse_rel._resolved_remote_key = local_key
+                reverse_rel.local_table_pk = target_mapper.pk
+                reverse_rel.remote_table_pk = self.pk
                 target_mapper.relationships[rel.backref] = reverse_rel
         
         else:

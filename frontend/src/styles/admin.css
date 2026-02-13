@@ -189,3 +189,73 @@
 .admin-modal-actions button.secondary:hover {
   background: #e0e5e0;
 }
+
+.admin-visit-procedures {
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid rgba(102, 181, 57, 0.15);
+}
+
+.admin-visit-procedures label {
+  display: block;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.admin-visit-procedures ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--spacing-sm);
+}
+
+.admin-visit-procedures li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(102, 181, 57, 0.1);
+}
+
+.admin-visit-procedures .btn-remove-small {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.admin-visit-procedures .btn-remove-small:hover {
+  background: var(--color-error);
+  color: var(--color-text-light);
+}
+
+.admin-add-procedure {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.admin-add-procedure select {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  font-size: var(--font-size-sm);
+  border: 2px solid #e0e5e0;
+  border-radius: var(--radius-sm);
+}
+
+.admin-add-procedure button {
+  padding: 0.4rem 0.8rem;
+  background: var(--color-primary);
+  color: var(--color-text-light);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-add-procedure button:hover {
+  background: var(--color-primary-dark);
+}

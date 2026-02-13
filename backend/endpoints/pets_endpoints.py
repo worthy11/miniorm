@@ -34,14 +34,20 @@ def get_pets(
     species: str = Query(None),
     breed: str = Query(None),
     birth_date: str = Query(None),
+    order_by: str = Query(None),
+    order_dir: str = Query("ASC"),
 ):
+    q = session.query(Pet)
+    if order_by and order_by in ("pet_id", "owner_id", "name", "species", "breed", "birth_date"):
+        col = "owner" if order_by == "owner_id" else order_by
+        q = q.order_by(col, order_dir or "ASC")
     if owner_id is not None:
         owner = session.get(Owner, owner_id)
         if not owner:
             return []
-        pets = session.query(Pet).filter(owner=owner_id).all()
+        pets = q.filter(owner=owner_id).all()
     else:
-        pets = session.query(Pet).all()
+        pets = q.all()
     pets = _apply_pet_filters(pets, owner_id, name, species, breed, birth_date)
     return [
         {
