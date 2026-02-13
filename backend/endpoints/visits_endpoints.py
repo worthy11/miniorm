@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel
 from miniorm.session import Session
-from models import Visit, Pet, Vet
+from models import Visit, Pet, Vet, Procedure
 from deps import get_session
 
 router = APIRouter()
@@ -10,6 +10,7 @@ class VisitCreate(BaseModel):
     pet_id: int
     vet_id: int
     date: str
+    procedure_id: int | None = None
     reason: str
     paid: int
 
@@ -53,7 +54,8 @@ def get_visits(
             "vet_id": v.vet.person_id if v.vet else None,
             "date": v.date,
             "reason": v.reason,
-            "paid": v.paid
+            "paid": v.paid,
+            "procedure": v.procedures[0].procedure_id if getattr(v, "procedures", None) else None
         }
         for v in visits
     ]
@@ -69,6 +71,15 @@ def add_visit(visit: VisitCreate, session: Session = Depends(get_session)):
         reason=visit.reason,
         paid=visit.paid
     )
+    if visit.procedure_id:
+        from models import Procedure
+        proc = session.get(Procedure, visit.procedure_id)
+        if proc:
+            # Ważne: musisz zainicjalizować listę, jeśli jest pusta
+            if not hasattr(new_visit, 'procedures') or new_visit.procedures is None:
+                new_visit.procedures = []
+            
+            new_visit.procedures.append(proc)
     session.add(new_visit)
     session.commit()
     return {

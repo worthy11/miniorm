@@ -9,6 +9,7 @@ class Query:
         self._limit = None
         self._offset = None
         self._joins = []
+        self._order_by = []
 
     def filter(self, **kwargs):
         self.filters.update(kwargs)
@@ -18,13 +19,24 @@ class Query:
         self._limit = value
         return self
     
+    def order_by(self, column_name, direction="ASC"):
+        direction = direction.upper()
+        if direction not in ("ASC", "DESC"):
+            raise ValueError("Direction must be ASC or DESC")
+        
+        if column_name not in self.model_class._mapper.columns:
+            raise AttributeError(f"Model {self.model_class.__name__} has no column {column_name}")
+            
+        self._order_by.append((column_name, direction))
+        return self
+    
     def all(self):
         if hasattr(self.session, '_autoflush'):
             self.session._autoflush()
             
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
-            mapper, self.filters, limit=self._limit, offset=self._offset, joins=self._joins
+            mapper, self.filters, limit=self._limit, offset=self._offset, joins=self._joins, order_by=self._order_by
         )
         
         rows = self.session.engine.execute(sql, params)

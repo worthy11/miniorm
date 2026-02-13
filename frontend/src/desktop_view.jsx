@@ -3,9 +3,10 @@ import "./styles/desktop.css";
 
 function DesktopView({ user }) {
   const [visits, setVisits] = useState([]);
-  const [visitForm, setVisitForm] = useState({ pet_id: "", vet_id: "", date: "", reason: "", paid: 0 });
+  const [visitForm, setVisitForm] = useState({ pet_id: "", vet_id: "", procedure_id: "", date: "", reason: "", paid: 0 });
   const [pets, setPets] = useState([]);
   const [vets, setVets] = useState([]);
+  const [procedures, setProcedures] = useState([]);
   const [petForm, setPetForm] = useState({ name: "", species: "", breed: "", birth_date: "" });
   const [message, setMessage] = useState("");
 
@@ -13,12 +14,19 @@ function DesktopView({ user }) {
     fetchVisits();
     fetchPets();
     fetchVets();
+    fetchProcedures();
   }, []);
 
   async function fetchVets() {
     const res = await fetch("/api/vets");
     const data = await res.json();
     setVets(data);
+  }
+
+  async function fetchProcedures() {
+    const res = await fetch("/api/procedures");
+    const data = await res.json();
+    setProcedures(data);
   }
 
   async function fetchVisits() {
@@ -42,6 +50,7 @@ function DesktopView({ user }) {
         ...visitForm,
         pet_id: parseInt(visitForm.pet_id, 10),
         vet_id: parseInt(visitForm.vet_id, 10),
+        procedure_id: visitForm.procedure_id ? parseInt(visitForm.procedure_id, 10) : null,
       };
       const res = await fetch("/api/visits", {
         method: "POST",
@@ -51,7 +60,7 @@ function DesktopView({ user }) {
       const data = await res.json();
       if (res.ok) {
         setMessage("Visit added!");
-        setVisitForm({ pet_id: "", vet_id: "", date: "", reason: "", paid: 0 });
+        setVisitForm({ pet_id: "", vet_id: "", procedure_id: "", date: "", reason: "", paid: 0 });
         fetchVisits();
       } else {
         setMessage(data.message || "Error adding visit");
@@ -136,6 +145,14 @@ function DesktopView({ user }) {
                 </option>
               ))}
             </select>
+            <select name="procedure_id" value={visitForm.procedure_id} onChange={handleVisitChange} required>
+              <option value="">Select Procedure</option>
+              {procedures.map(p => (
+                <option key={p.procedure_id} value={p.procedure_id}>
+                  {p.name} (${p.price})
+                </option>
+              ))}
+            </select>
             <input name="date" value={visitForm.date} onChange={handleVisitChange} placeholder="Date (YYYY-MM-DD)" required />
             <input name="reason" value={visitForm.reason} onChange={handleVisitChange} placeholder="Reason" required />
             {/* Hide or lock the paid field so user cannot set it manually */}
@@ -145,11 +162,15 @@ function DesktopView({ user }) {
           {message && <p>{message}</p>}
           <h3>Visits</h3>
           <ul>
-            {visits.map(v => (
-              <li key={v.visit_id}>
-                Pet: {v.pet_id}, Vet: {v.vet_id}, Date: {v.date}, Reason: {v.reason}, Paid: {v.paid}
-              </li>
-            ))}
+            {visits.map(v => {
+              const proc = procedures.find(p => p.procedure_id == v.procedure);
+              return (
+                <li key={v.visit_id}>
+                  Pet: {v.pet_id}, Vet: {v.vet_id}, Date: {v.date}, Reason: {v.reason}, Paid: {v.paid}
+                  {proc && <span>, Procedure: {proc.name}</span>}
+                </li>
+              );
+            })}
           </ul>
         </div>
       </div>
@@ -159,4 +180,3 @@ function DesktopView({ user }) {
 }
 
 export default DesktopView;
-

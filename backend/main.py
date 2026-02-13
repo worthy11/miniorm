@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -35,7 +36,8 @@ from endpoints.pets_endpoints import router as pets_router
 from endpoints.vets_endpoints import router as vets_router
 from endpoints.procedures_endpoints import router as procedures_router
 
-engine = DatabaseEngine("miniorm.sqlite")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+engine = DatabaseEngine(os.path.join(BASE_DIR, "miniorm.sqlite"))
 SchemaGenerator().create_all(engine, MiniBase._registry, drop_first=False)
 
 session = Session(engine)
@@ -48,3 +50,6 @@ app.include_router(pets_router)
 app.include_router(vets_router)
 app.include_router(procedures_router)
 
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

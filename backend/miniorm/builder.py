@@ -19,7 +19,7 @@ class QueryBuilder:
         sql = f"INSERT INTO {table} ({', '.join(quoted_fields)}) VALUES ({placeholders})"
         return sql, tuple(values)
 
-    def build_select(self, mapper, filters, limit=None, offset=None, joins=None):
+    def build_select(self, mapper, filters, limit=None, offset=None, joins=None, order_by=None):
         table_name = mapper.table_name
         table = self._quote(table_name)
 
@@ -157,6 +157,10 @@ class QueryBuilder:
                     params.append(val)
             sql += " WHERE " + " AND ".join(where_parts)
 
+        if order_by:
+            order_clauses = [f'"{col}" {dir}' for col, dir in order_by]
+            sql += f' ORDER BY {", ".join(order_clauses)}'
+        
         if limit is not None:
             sql += f" LIMIT {int(limit)}"
             if offset is not None: sql += f" OFFSET {int(offset)}"

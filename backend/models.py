@@ -18,7 +18,7 @@ class Pet(MiniBase):
     class Meta:
         table_name = "pets"
     pet_id = Number(pk=True)
-    owner = Relationship("persons", backref="pets", r_type="many-to-one")
+    owner = Relationship("persons", backref="pets", r_type="many-to-one", cascade_delete=True)
     name = Text()
     species = Text()
     breed = Text()
@@ -43,8 +43,9 @@ class Visit(MiniBase):
     class Meta:
         table_name = "visits"
     visit_id = Number(pk=True)
-    pet = Relationship("pets", backref="visits", r_type="many-to-one")
-    vet = Relationship("persons", backref="visits", r_type="many-to-one")
+    pet = Relationship("pets", backref="visits", r_type="many-to-one", cascade_delete=True)
+    vet = Relationship("persons", backref="visits", r_type="many-to-one", cascade_delete=True)
+    procedures = Relationship("procedures", backref="visits", r_type="many-to-many")
     date = Text()
     reason = Text()
     paid = Number()

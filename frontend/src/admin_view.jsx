@@ -15,6 +15,7 @@ export default function AdminView() {
   const [message, setMessage] = useState("");
   const [editModal, setEditModal] = useState(null);
   const [form, setForm] = useState({});
+  const [sort, setSort] = useState({ column: "", direction: "ASC" });
 
   useEffect(() => {
     fetchData();
@@ -26,6 +27,10 @@ export default function AdminView() {
       keys.forEach((k) => {
         if (filters[k] != null && filters[k] !== "") q.set(k, filters[k]);
       });
+      if (sort.column) {
+      q.set("order_by", sort.column);
+      q.set("order_dir", sort.direction);
+    }
       return q.toString();
     };
     if (activeTab === "owners") {
@@ -322,7 +327,24 @@ export default function AdminView() {
                 value={filters.phone || ""}
                 onChange={handleFilterChange}
               />
-              <button onClick={fetchData}>Apply</button>
+              <select name="order_by" value={sort.column} onChange={(e) => setSort(s => ({...s, column: e.target.value}))}>
+                <option value="">Sort by (None)</option>
+                <option value="last_name">Last Name</option>
+                <option value="first_name">First Name</option>
+                <option value="email">Email</option>
+                <option value="person_id">ID</option>
+              </select>
+
+              <select 
+                name="order_dir" 
+                value={sort.direction} 
+                onChange={(e) => setSort(s => ({...s, direction: e.target.value}))}
+              >
+                <option value="ASC">Ascending</option>
+                <option value="DESC">Descending</option>
+              </select>
+
+              <button onClick={fetchData}>Apply & Sort</button>
             </div>
             <form onSubmit={handleAdd} className="pet-form">
               <input

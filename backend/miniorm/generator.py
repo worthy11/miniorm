@@ -51,6 +51,9 @@ class SchemaGenerator:
             engine.execute("PRAGMA foreign_keys = ON")
 
     def create_all(self, engine, registry, drop_first=False):
+        from miniorm.mapper import Mapper
+        Mapper.finalize_mappers()
+
         if drop_first:
             self.drop_all(engine, registry)
 

@@ -52,6 +52,8 @@ def get_owners(
     last_name: str = Query(None),
     email: str = Query(None),
     phone: str = Query(None),
+    order_by: str = Query(None),
+    order_dir: str = Query("ASC"),
 ):
     owners = session.query(Owner).all()
     owners = _apply_owner_filters(owners, first_name, last_name, email, phone)
