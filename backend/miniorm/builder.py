@@ -9,7 +9,7 @@ class QueryBuilder:
             raise ValueError(f"Unsafe SQL identifier: {identifier}")
         return f'"{identifier}"'
 
-    def build_select(self, mapper, filters, limit=None, offset=None, joins=None, order_by=None):
+    def build_select(self, mapper, filters, filter_expressions=None, limit=None, offset=None, joins=None, order_by=None):
         table_name = mapper.table_name
         table = self._quote(table_name)
 
@@ -55,9 +55,11 @@ class QueryBuilder:
         if 'all_joins' in locals() and all_joins:
             sql += " " + " ".join(all_joins)
 
+        where_parts = []
+        
+        # Process simple equality filters
         actual_filters = dict(filters)
         if actual_filters:
-            where_parts = []
             for col, val in actual_filters.items():
                 table_name = cols[col]
                 prefixed_col = f"{table_name}.{self._quote(col)}"
@@ -67,6 +69,15 @@ class QueryBuilder:
                 else:
                     where_parts.append(f"{prefixed_col} = ?")
                     params.append(val)
+        
+        # Process complex filter expressions
+        if filter_expressions:
+            for expr in filter_expressions:
+                sql_part, expr_params = self._build_filter_expression(expr, cols, table)
+                where_parts.append(sql_part)
+                params.extend(expr_params)
+        
+        if where_parts:
             sql += " WHERE " + " AND ".join(where_parts)
 
         if order_by:
@@ -86,6 +97,84 @@ class QueryBuilder:
         # print(f"DEBUG: SELECT: {sql}")
 
         return sql, tuple(params)
+    
+    def _build_filter_expression(self, expr, cols, table):
+        """Convert a filter expression into SQL and parameters"""
+        from miniorm.filters import (
+            ComparisonFilter, InFilter, NotInFilter, LikeFilter, ILikeFilter,
+            IsNullFilter, IsNotNullFilter, BetweenFilter, CombinedFilter, ColumnFilter, NotFilter
+        )
+        
+        params = []
+        
+        if isinstance(expr, ComparisonFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            
+            if expr.is_field_comparison:
+                # Field-to-field comparison
+                other_col = expr.value.column_name
+                other_table_name = cols.get(other_col, table.strip('"'))
+                prefixed_other_col = f"{other_table_name}.{self._quote(other_col)}"
+                return f"{prefixed_col} {expr.operator} {prefixed_other_col}", params
+            else:
+                # Value comparison
+                return f"{prefixed_col} {expr.operator} ?", [expr.value]
+        
+        elif isinstance(expr, InFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            placeholders = ", ".join(["?" for _ in expr.values])
+            return f"{prefixed_col} IN ({placeholders})", list(expr.values)
+        
+        elif isinstance(expr, NotInFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            placeholders = ", ".join(["?" for _ in expr.values])
+            return f"{prefixed_col} NOT IN ({placeholders})", list(expr.values)
+        
+        elif isinstance(expr, LikeFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            return f"{prefixed_col} LIKE ?", [expr.pattern]
+        
+        elif isinstance(expr, ILikeFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            # SQLite doesn't have ILIKE, so we use LIKE with LOWER
+            return f"LOWER({prefixed_col}) LIKE LOWER(?)", [expr.pattern]
+        
+        elif isinstance(expr, IsNullFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            return f"{prefixed_col} IS NULL", []
+        
+        elif isinstance(expr, IsNotNullFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            return f"{prefixed_col} IS NOT NULL", []
+        
+        elif isinstance(expr, BetweenFilter):
+            table_name = cols.get(expr.column_name, table.strip('"'))
+            prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
+            return f"{prefixed_col} BETWEEN ? AND ?", [expr.lower, expr.upper]
+        
+        elif isinstance(expr, CombinedFilter):
+            parts = []
+            all_params = []
+            for sub_expr in expr.filters:
+                sql_part, expr_params = self._build_filter_expression(sub_expr, cols, table)
+                parts.append(f"({sql_part})")
+                all_params.extend(expr_params)
+            return f" {expr.logic} ".join(parts), all_params
+        
+        elif isinstance(expr, NotFilter):
+            # Negate a filter expression
+            sql_part, expr_params = self._build_filter_expression(expr.filter_expr, cols, table)
+            return f"NOT ({sql_part})", expr_params
+        
+        else:
+            raise TypeError(f"Unknown filter expression type: {type(expr)}")
 
     def build_insert(self, table_name, data):
         """Build INSERT SQL from table name and data dict. Does not use mapper."""

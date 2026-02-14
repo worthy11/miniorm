@@ -42,6 +42,58 @@ class Column:
         self.unique = unique
         self.default = default
 
+    def __eq__(self, other):
+        return FilterExpr(self, '=', other)
+    def __ne__(self, other):
+        return FilterExpr(self, '!=', other)
+    def __lt__(self, other):
+        return FilterExpr(self, '<', other)
+    def __le__(self, other):
+        return FilterExpr(self, '<=', other)
+    def __gt__(self, other):
+        return FilterExpr(self, '>', other)
+    def __ge__(self, other):
+        return FilterExpr(self, '>=', other)
+
+class FilterExpr:
+    def __init__(self, column, op, value):
+        self.column = column
+        self.op = op
+        self.value = value
+        self.is_subquery = isinstance(value, (SubqueryExpr, QueryExpr))
+
+class QueryExpr:
+    def __init__(self, sql, params=None):
+        self.sql = sql
+        self.params = params or []
+    def __repr__(self):
+        return f"<QueryExpr {self.sql} params={self.params}>"
+
+class SubqueryExpr:
+    def __init__(self, query, params=None):
+        self.query = query
+        self.params = params or []
+    def __repr__(self):
+        return f"<SubqueryExpr {self.query} params={self.params}>"
+    def __and__(self, other):
+        return CombinedFilterExpr(self, 'AND', other)
+    def __or__(self, other):
+        return CombinedFilterExpr(self, 'OR', other)
+    def __repr__(self):
+        return f"<FilterExpr {self.column} {self.op} {self.value}>"
+
+class CombinedFilterExpr:
+    def __init__(self, left, op, right):
+        self.left = left
+        self.op = op
+        self.right = right
+    def __and__(self, other):
+        return CombinedFilterExpr(self, 'AND', other)
+    def __or__(self, other):
+        return CombinedFilterExpr(self, 'OR', other)
+    def __repr__(self):
+        return f"<CombinedFilterExpr {self.left} {self.op} {self.right}>"
+    
 class Text(Column):
     def __init__(self, pk=False, nullable=True, unique=False, default=None):
         super().__init__(str, pk, nullable, unique, default)

@@ -20,11 +20,11 @@ class MiniBase:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
-        columns = {
-            name: col
-            for name, col in cls.__dict__.items()
-            if isinstance(col, Column)
-        }
+        columns = {}
+        for name, col in cls.__dict__.items():
+            if isinstance(col, Column):
+                col.name = name
+                columns[name] = col
 
         relationships = {
             name: rel

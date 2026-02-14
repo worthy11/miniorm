@@ -93,7 +93,7 @@ class Mapper:
         if isinstance(target, str):
             from miniorm.base import MiniBase
             for cls in MiniBase._registry:
-                if getattr(cls, "_mapper", None) and cls._mapper.table_name == target:
+                if getattr(cls, "_mapper", None) and (cls._mapper.table_name == target or cls.__name__ == target):
                     return cls
         return None
 

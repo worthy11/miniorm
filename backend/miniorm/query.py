@@ -1,19 +1,40 @@
 from miniorm.base import MiniBase
 from miniorm.orm_types import Column
 from miniorm.states import ObjectState
+from miniorm.filters import FilterExpression
 
 class Query:
     def __init__(self, model_class, session):
         self.model_class = model_class
         self.session = session
         self.filters = {}
+        self.filter_expressions = []
         self._limit = None
         self._offset = None
         self._joins = []
         self._order_by = []
 
-    def filter(self, **kwargs):
-        self.filters.update(kwargs)
+    def filter(self, *args, **kwargs):
+        """
+        Apply filters to the query.
+        
+        Supports multiple styles:
+        - Simple equality: filter(name='John', age=30)
+        - Advanced expressions: filter(col('age') > 30)
+        - Multiple expressions: filter(col('age') > 30, col('name').like('%John%'))
+        - Combined expressions: filter((col('age') > 30) & (col('status') == 'active'))
+        """
+        # Handle filter expressions
+        for arg in args:
+            if isinstance(arg, FilterExpression):
+                self.filter_expressions.append(arg)
+            else:
+                raise TypeError(f"Expected FilterExpression, got {type(arg)}")
+        
+        # Handle simple keyword filters
+        if kwargs:
+            self.filters.update(kwargs)
+        
         return self
 
     def limit(self, value: int):
@@ -37,7 +58,8 @@ class Query:
             
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
-            mapper, self.filters, limit=self._limit, offset=self._offset, joins=self._joins, order_by=self._order_by
+            mapper, self.filters, filter_expressions=self.filter_expressions,
+            limit=self._limit, offset=self._offset, joins=self._joins, order_by=self._order_by
         )
         
         rows = self.session.engine.execute(sql, params)
