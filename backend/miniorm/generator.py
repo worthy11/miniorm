@@ -24,8 +24,6 @@ class SchemaGenerator:
         for mapper in registry.values():
             if mapper.abstract:
                 continue
-            if mapper.inheritance.strategy.name == "CONCRETE" and getattr(mapper, 'children', None):
-                continue
             name = mapper.table_name
             if name not in table_definitions:
                 table_definitions[name] = None
@@ -63,8 +61,6 @@ class SchemaGenerator:
         for mapper in registry.values():
             if mapper.abstract:
                 continue
-            if mapper.inheritance.strategy.name == "CONCRETE" and getattr(mapper, 'children', None):
-                continue
             name = mapper.table_name
             if name not in table_definitions:
                 table_definitions[name] = {
@@ -73,10 +69,7 @@ class SchemaGenerator:
                     'mapper': mapper
                 }
             
-            if mapper.inheritance.strategy.name == "CLASS":
-                table_definitions[name]['columns'].update(mapper.declared_columns)
-            else:
-                table_definitions[name]['columns'].update(mapper.columns)
+            table_definitions[name]['columns'].update(mapper.columns)
 
         for t_name, info in table_definitions.items():
             sql = self._generate_sql(t_name, info)

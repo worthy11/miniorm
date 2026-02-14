@@ -102,6 +102,7 @@ class MiniBase:
         return val
 
     def _load_relationship(self, session, rel):
+        print(f"DEBUG: Loading relationship {rel} for {self}...")
         target_cls = rel._resolved_target
         if not target_cls:
             return None

@@ -1,4 +1,5 @@
 from miniorm.base import MiniBase
+from miniorm.orm_types import Column
 from miniorm.states import ObjectState
 
 class Query:
@@ -19,14 +20,14 @@ class Query:
         self._limit = value
         return self
     
-    def order_by(self, column_name, direction="ASC"):
+    def order_by(self, column_attr, direction="ASC"):
         direction = direction.upper()
         if direction not in ("ASC", "DESC"):
             raise ValueError("Direction must be ASC or DESC")
         
-        if column_name not in self.model_class._mapper.columns:
-            raise AttributeError(f"Model {self.model_class.__name__} has no column {column_name}")
-            
+        column_name = self.model_class._mapper._get_column_name(column_attr)
+        if column_name is None:
+            raise AttributeError(f"Column {column_attr} is not an attribute of {self.model_class.__name__}")
         self._order_by.append((column_name, direction))
         return self
     

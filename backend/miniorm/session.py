@@ -104,7 +104,6 @@ class Session:
             return
 
         self.unit_of_work = self._sort_unit_of_work()
-
         entities_to_sync = set()
 
         try:
@@ -114,40 +113,41 @@ class Session:
 
             while self.unit_of_work:
                 transaction = self.unit_of_work.popleft()
+                transaction_type = type(transaction)
                 self._processed_transactions.append(transaction)
-                entities_to_sync.add(transaction.entity)
                 
                 operations = transaction.prepare()
-                if not isinstance(operations, list):
-                    operations = [operations]
                 
                 current_id = None
                 for op in operations:
-                    sql, params, apply_side_effects, rebuild_fn = op
-                    if rebuild_fn and current_id is not None:
-                        sql, params = rebuild_fn(current_id)
-                    
-                    if sql is None:
-                        continue
-                    
-                    from miniorm.transactions import InsertTransaction
-                    if isinstance(transaction, InsertTransaction):
-                        result = self.engine.execute(sql, params, return_lastrowid=True)
-                        if apply_side_effects:
-                            apply_side_effects(result, current_id)
-                        current_id = result
-                    else:
-                        self.engine.execute(sql, params)
-                        if apply_side_effects:
-                            apply_side_effects(None, None)
+                    print(f"DEBUG: Processing operation: {op}")
+                    table_name, data = op["table_name"], op["data"]
 
-                for entity in list(entities_to_sync):
-                    state = getattr(entity, '_orm_state', None)
-                    if state == ObjectState.DELETED:
-                        continue
-                    self._flush_m2m(entity)
+                    if transaction_type == InsertTransaction:
+                        # jeżeli to jest insert z CLASS inheritance, to potrzebujemy pk rodzica
+                        fk_col = op.get("fk_col")
+                        if fk_col:
+                            data[fk_col] = current_id
+                        sql, params = self.query_builder.build_insert(table_name, data)
+                    elif transaction_type == UpdateTransaction:
+                        sql, params = self.query_builder.build_update(table_name, data)
+                    elif transaction_type == DeleteTransaction:
+                        sql, params = self.query_builder.build_delete(table_name, data)
 
-            
+                    current_id = self.engine.execute(
+                        sql, params, return_lastrowid=(transaction_type == InsertTransaction)
+                    )
+
+                entities_to_sync.add(transaction.entity)
+
+                
+            for entity in list(entities_to_sync):
+                state = getattr(entity, '_orm_state', None)
+                if state == ObjectState.DELETED:
+                    continue
+                self._flush_m2m(entity)
+                self.refresh(entity)
+
             self._processed_transactions = []
 
         except Exception as e:
@@ -299,7 +299,7 @@ class Session:
             if other_mapper.cls is entity.__class__:
                 continue
             for rel in other_mapper.relationships.values():
-                if not getattr(rel, 'cascade_delete', False):
+                if not getattr(rel, 'cascade_delete', True):
                     continue
                 if rel.r_type not in ('many-to-one', 'one-to-one'):
                     continue
@@ -423,6 +423,7 @@ class Session:
             self.flush()
             
     def refresh(self, instance):
+        print(f"DEBUG: Refreshing {instance}...")
         mapper = instance._mapper
         pk_name = mapper.pk
         pk_val = instance.__dict__.get(pk_name)

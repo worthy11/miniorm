@@ -11,7 +11,7 @@ class AssociationTable:
 
 
 class Relationship:
-    def __init__(self, target, r_type="many-to-one", pk=False, backref=None, cascade_delete=False):
+    def __init__(self, target, r_type="many-to-one", pk=False, backref=None, cascade_delete=True):
         self.target_table = target
         self.r_type = r_type
         self.pk = pk
@@ -51,7 +51,7 @@ class Number(Column):
         super().__init__(int, pk, nullable, unique, default)
 
 class ForeignKey(Column):
-    def __init__(self, target_table, target_column, pk=False, nullable=True, unique=True, on_delete_cascade=False):
+    def __init__(self, target_table, target_column, pk=False, nullable=True, unique=True, on_delete_cascade=True):
         super().__init__(int, pk=pk, nullable=nullable, unique=unique)
         self.target_table = target_table
         self.target_column = target_column

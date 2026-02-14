@@ -6,14 +6,9 @@ class Mapper:
         self.cls = cls
         self.meta = meta_attrs or {}
         
-        self.discriminator = None  # Resolved in _resolve_inheritance
-        self.discriminator_value = self.meta.get("discriminator_value", cls.__name__)
-        self.discriminator_map = None
-        
         self.pk = None
         self.inheritance = None
-        self.declared_columns = dict(columns)
-        self.columns = {}
+        self.columns = columns
         self.abstract = self.meta.get("abstract", False)
         
         self.parent = None
@@ -54,23 +49,16 @@ class Mapper:
                 if parent_strategy != requested:
                     raise ValueError(f"Inheritance strategy mismatch in class {self.cls.__name__} and {self.parent.cls.__name__}: {parent_strategy} != {requested}")
         else:
-            requested = "CLASS"
+            requested = "SINGLE"
 
         if requested not in STRATEGIES:
             raise ValueError(f"Unknown inheritance strategy: {requested}")
 
-        strategy = STRATEGIES[requested]
-        discriminator_value = self.meta.get("discriminator_value", self.cls.__name__)
-
-        self.inheritance = Inheritance(strategy, discriminator_value)
-        if self.parent and "discriminator" not in self.meta:
-            self.discriminator = self.parent.discriminator
-        else:
-            self.discriminator = self.meta.get("discriminator", "type")
         if self.parent:
             self.parent.children.append(self.cls)
-            if not self.parent.inheritance:
-                self.parent.inheritance = Inheritance(strategy, self.parent.cls.__name__)
+
+        strategy = STRATEGIES[requested]
+        self.inheritance = Inheritance(strategy)
     
     def _resolve_table_name(self):
         self.table_name = self.meta.get("table_name", self.cls.__name__+"s")
@@ -79,7 +67,6 @@ class Mapper:
             raise ValueError("Table name cannot contain '#'")
 
     def _resolve_columns(self):
-        self.columns = dict(self.declared_columns)
         self.inheritance.strategy.resolve_columns(self)
         
     def _resolve_relationships(self):
@@ -92,7 +79,7 @@ class Mapper:
             self._apply_relationship(name, rel, target_cls, target_cls._mapper)
 
     def _resolve_pk(self):
-        pk_cols = [name for name, col in self.declared_columns.items() if col.pk]
+        pk_cols = [name for name, col in self.columns.items() if col.pk]
         if pk_cols:
             self.pk = pk_cols[0]
         elif self.parent:
@@ -156,9 +143,8 @@ class Mapper:
             rel.remote_table = target_mapper.table_name
             
             fk = ForeignKey(target_mapper.table_name, target_mapper.pk, pk=rel.pk, unique=rel.r_type == "one-to-one",
-                            on_delete_cascade=getattr(rel, 'cascade_delete', False))
+                            on_delete_cascade=getattr(rel, 'cascade_delete', True))
             self.columns[name] = fk
-            self.declared_columns[name] = fk
             
             if getattr(rel, "backref", None) and rel.r_type == "many-to-one":
                 backref_name = rel.backref
@@ -175,7 +161,6 @@ class Mapper:
 
     @staticmethod
     def finalize_mappers():
-        """Resolve all deferred relationships and re-resolve PKs (in case relationship FKs are PKs)."""
         from miniorm.base import MiniBase
         
         for mapper in MiniBase._registry.values():
@@ -205,27 +190,24 @@ class Mapper:
                     raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
 
 
-    def _get_operation_columns(self, entity):
-        insert_data = {}
-        for col_name, col_obj in self.columns.items():
-            if col_name == self.pk:
-                continue
-            
-            value = getattr(entity, col_name, None)
-            
-            # np. jesli pet przechowuje ownera
-            if hasattr(value, '_mapper'):
-                target_pk = value._mapper.pk
-                value = getattr(value, target_pk, None)
-                
-            if value is not None:
-                insert_data[col_name] = value
-            elif col_obj.default is not None:
-                insert_data[col_name] = col_obj.default
-            elif col_obj.nullable:
-                insert_data[col_name] = None
-                
-        return insert_data
+    def _map_data_to_columns(self, entity):
+        mapped_data = {}
+
+        for attr in entity.__dict__:
+            if attr in self.columns:
+                val = getattr(entity, attr, None)
+                if hasattr(val, '_mapper'):
+                    target_pk = val._mapper.pk
+                    val = getattr(val, target_pk, None)
+
+                if val is not None:
+                    mapped_data[attr] = val
+                elif self.columns[attr].default is not None:
+                    mapped_data[attr] = self.columns[attr].default
+                else:
+                    mapped_data[attr] = None
+
+        return mapped_data
 
     def _get_mapper_for_table(self, table_name):
         from miniorm.base import MiniBase
@@ -234,11 +216,83 @@ class Mapper:
                 return m
         return self
 
+    def _get_column_name(self, column_attr):
+        attrs = self.inheritance.strategy.resolve_attributes(self)
+        for name, col in attrs.items():
+            if col is column_attr:
+                return name
+        return None
+
+    def _collect_cascade_dependents(self, entity):
+        if _visited is None:
+            _visited = set()
+        if id(entity) in _visited:
+            return []
+        _visited.add(id(entity))
+        out = []
+        mapper = entity._mapper
+        
+        entity_pk = getattr(entity, mapper.pk, None)
+        if entity_pk is None:
+            return [entity]
+
+        target_tables = {mapper.table_name}
+        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS" and mapper.parent:
+            target_tables.add(mapper.parent.table_name)
+        
+        for other_mapper in MiniBase._registry.values():
+            if other_mapper.cls is entity.__class__:
+                continue
+            for rel in other_mapper.relationships.values():
+                if not getattr(rel, 'cascade_delete', True):
+                    continue
+                if rel.r_type not in ('many-to-one', 'one-to-one'):
+                    continue
+                if not getattr(rel, '_resolved_target', None):
+                    continue
+                
+                fk_target_table = getattr(rel, 'remote_table', None)
+                if not fk_target_table:
+                    fk_target_table = rel._resolved_target._mapper.table_name
+                
+                if fk_target_table not in target_tables:
+                    continue
+                
+                fk_name = getattr(rel, '_resolved_fk_name', None)
+                if not fk_name:
+                    continue
+                self._is_loading = True
+                try:
+                    refs = self.query(other_mapper.cls).filter(**{fk_name: entity_pk}).all()
+                finally:
+                    self._is_loading = False
+                for ref in refs:
+                    out.extend(self._collect_cascade_dependents(ref, _visited))
+        out.append(entity)
+        return out
+
+    def prepare_select(self):
+        return self.inheritance.strategy.resolve_select(self)
+
     def prepare_insert(self, entity):
         return self.inheritance.strategy.resolve_insert(self, entity)
     
     def prepare_update(self, entity, old_state):
-        return self.inheritance.strategy.resolve_update(self, entity, old_state)   
+        operations = self.inheritance.strategy.resolve_update(self, entity)
+        if old_state:
+            for table_name in list(operations.keys()):
+                print(f"DEBUG: OLD STATE: {old_state}")
+                data = operations[table_name]
+                filtered = {
+                    k: v for k, v in data.items()
+                    if old_state.get(k) != v
+                }
+                # nic nie zostało do zmiany
+                if len(filtered) == 1 and "_pk" in filtered:
+                    operations.pop(table_name)
+                else:
+                    operations[table_name] = filtered
+        return operations   
     
     def prepare_delete(self, entity):
         return self.inheritance.strategy.resolve_delete(self, entity)
@@ -260,13 +314,3 @@ class Mapper:
                         object.__setattr__(obj, key, value)
 
         return obj
-    
-    def _hydrate_row_to_dict(self, row, column_names):
-        data = {}
-        row_map = dict(zip(column_names, row))
-        
-        for attr_name, col_obj in self.columns.items():
-            if attr_name in row_map:
-                data[attr_name] = row_map[attr_name]
-        
-        return data
