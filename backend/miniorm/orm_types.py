@@ -7,7 +7,7 @@ class AssociationTable:
         self.remote_table = remote_table
 
     def __repr__(self):
-        return f"<AssociationTable {self.name}({self.local_key}, {self.remote_key})>"
+        return f"<AssociationTable {self.name}({self.local_key}, {self.remote_key}) local_table={self.local_table} remote_table={self.remote_table} local_key={self.local_key} remote_key={self.remote_key}>"
 
 
 class Relationship:

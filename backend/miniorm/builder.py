@@ -194,9 +194,9 @@ class QueryBuilder:
 
         pk_info = data["_pk"]
         pk_col, pk_val = list(pk_info.items())[0]
-        
+
         for col, val in data.items():
-            if col == "_pk":
+            if col == "_pk" or col == pk_col:
                 continue
             set_parts.append(f"{self._quote(col)} = ?")
             params.append(val)

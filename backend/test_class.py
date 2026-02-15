@@ -29,6 +29,27 @@ class Student(Person):
     def __repr__(self):
         return f"<Student(id={self.person_id}, first_name={self.first_name}, last_name={self.last_name}, age={self.age}, index={self.index})>"
 
+class GraduateStudent(Student):
+    class Meta:
+        inheritance = "CLASS"
+        table_name = "graduate_students"
+    graduation_date = Text()
+    student_id = Relationship(pk=True, target="students", r_type="one-to-one", cascade_delete=True)
+
+    def __repr__(self):
+        return f"<GraduateStudent(id={self.student_id}, first_name={self.first_name}, last_name={self.last_name}, age={self.age}, index={self.index}, graduation_date={self.graduation_date})>"
+
+
+class MasterStudent(Student):
+    class Meta:
+        inheritance = "CLASS"
+        table_name = "master_students"
+    master_thesis = Text()
+    student_id = Relationship(pk=True, target="students", r_type="one-to-one", cascade_delete=True)
+
+    def __repr__(self):
+        return f"<MasterStudent(id={self.student_id}, first_name={self.first_name}, last_name={self.last_name}, age={self.age}, index={self.index}, master_thesis={self.master_thesis})>"
+
 
 class Employee(Person):
     class Meta:
@@ -92,10 +113,10 @@ def test_insert():
 
 def test_update():
     # print(f"DEBUG: Updating people...")
-    people = session.query(Person).all()
-    for person in people:
-        person.last_name = "Majewski"
-        session.update(person)
+    # people = session.query(Person).all()
+    # for person in people:
+    #     person.last_name = "Majewski"
+    #     session.update(person)
     # session.commit()
 
     students = session.query(Student).all()
@@ -111,6 +132,47 @@ def test_delete():
     session.delete(math)
     session.commit()
 
+def test_inheritance():
+    graduate_student = GraduateStudent(first_name="John", last_name="Doe", age=20, index="123456", graduation_date="2026-01-01")
+    master_student = MasterStudent(first_name="Jane", last_name="Smith", age=22, index="123457", master_thesis="Master Thesis")
+    subjects = [Subject(name="Computer Science"), Subject(name="Mathematics")]
+    graduate_student.subjects = subjects
+    master_student.subjects = subjects
+    session.add(graduate_student)
+    session.add(master_student)
+    session.commit()
+
+    graduate_student = session.query(GraduateStudent).all()
+    for graduate in graduate_student:
+        print(graduate)
+        print(graduate.__dict__)
+        print(graduate.subjects)
+
+    master_student = session.query(MasterStudent).all()
+    subjects = session.query(Subject).all()
+    for master in master_student:
+        master.subjects = [subjects[0]]
+        session.update(master)
+    session.commit()
+    master_student = session.query(MasterStudent).all()
+    for master in master_student:
+        print(master)
+        print(master.subjects)
+
+    session.delete(graduate_student[0])
+    session.delete(subjects[0])
+    session.commit()
+
+    graduate_student = session.query(GraduateStudent).all()
+    for graduate in graduate_student:
+        print(graduate)
+        print(graduate.subjects)
+
+    master_student = session.query(MasterStudent).all()
+    for master in master_student:
+        print(master)
+        print(master.subjects)
+
 
 engine = DatabaseEngine(db_path="test_class.sqlite")
 generator = SchemaGenerator()
@@ -119,5 +181,5 @@ generator.create_all(engine, MiniBase._registry, drop_first=True)
 with Session(engine) as session:
     test_insert()
     test_update()
-    test_delete()
     test_select()
+    test_delete()

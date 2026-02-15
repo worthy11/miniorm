@@ -160,7 +160,6 @@ class Session:
                     continue
                 self._flush_m2m(entity)
 
-            # Update snapshots for flushed entities so _get_dirty_objects won't re-queue them
             for entity in entities_to_sync:
                 if getattr(entity, '_orm_state', None) != ObjectState.DELETED:
                     self._take_snapshot(entity)
@@ -284,6 +283,7 @@ class Session:
                 except: pass 
 
             for target_id in to_remove:
+                print(f"DEBUG: Removing M2M relationship {name} from {instance} to {target_id}")
                 sql, params = self.query_builder.build_m2m_delete(
                     assoc.name, local_id, target_id, assoc.local_key, assoc.remote_key
                 )

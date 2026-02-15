@@ -215,7 +215,7 @@ class Mapper:
             if mapper._pending_relationships:
                 pending = [(n, r.target_table) for n, r in mapper._pending_relationships]
                 raise ValueError(f"Cannot resolve relationship target(s) after all models loaded: {mapper.cls.__name__} pending: {pending}")
-        
+
         for mapper in MiniBase._registry.values():
             mapper._resolve_pk()
         
