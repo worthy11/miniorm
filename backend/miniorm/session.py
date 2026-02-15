@@ -65,7 +65,6 @@ class Session:
         if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
             if not any(t.entity is entity and isinstance(t, UpdateTransaction) for t in self.unit_of_work):
                 for attr in entity.__dict__:
-                    print(f"DEBUG: Attribute: {attr}")
                     value = getattr(entity, attr)
                     if hasattr(value, '_mapper'):
                         self.update(value)
@@ -160,6 +159,11 @@ class Session:
                 if state == ObjectState.DELETED:
                     continue
                 self._flush_m2m(entity)
+
+            # Update snapshots for flushed entities so _get_dirty_objects won't re-queue them
+            for entity in entities_to_sync:
+                if getattr(entity, '_orm_state', None) != ObjectState.DELETED:
+                    self._take_snapshot(entity)
 
             self._processed_transactions = []
 
@@ -271,9 +275,6 @@ class Session:
 
             to_add = current_ids - old_ids
             to_remove = old_ids - current_ids
-
-            if to_add or to_remove:
-                print(f"DEBUG M2M [{instance}]: Sync {assoc.name} | Adding: {to_add}, Removing: {to_remove}")
 
             for target_id in to_add:
                 sql, params = self.query_builder.build_m2m_insert(

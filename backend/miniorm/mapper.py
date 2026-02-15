@@ -9,7 +9,6 @@ class Mapper:
         self.pk = None
         self.inheritance = None
         self.columns = columns
-        self.abstract = self.meta.get("abstract", False)
         
         self.parent = None
         self.declared_relationships = dict(relationships)
@@ -70,7 +69,6 @@ class Mapper:
         self.inheritance.strategy.resolve_columns(self)
         
     def _resolve_relationships(self):
-        """Try to resolve relationships immediately. Defer if target not available."""
         for name, rel in self.declared_relationships.items():
             target_cls = self._resolve_target_class(rel.target_table)
             if target_cls is None:
@@ -116,31 +114,31 @@ class Mapper:
 
             rel.association_table = AssociationTable(
                 name=table_name, local_key=local_key, remote_key=remote_key,
-                local_table=self.table_name, remote_table=target_mapper.table_name,
-                local_mapper=self, remote_mapper=target_mapper
+                local_table=self.table_name, remote_table=target_mapper.table_name
             )
 
             rel._resolved_local_key = local_key
             rel._resolved_remote_key = remote_key
 
+            reverse_rel = Relationship(self.table_name, r_type="many-to-many", backref=name)
+            reverse_rel._resolved_target = self.cls
+            reverse_rel.local_table = target_mapper.table_name
+            reverse_rel.remote_table = self.table_name
+
+            reverse_rel.association_table = AssociationTable(
+                name=table_name, local_key=remote_key, remote_key=local_key,
+                local_table=target_mapper.table_name, remote_table=self.table_name
+            )
+
+            reverse_rel._resolved_local_key = remote_key
+            reverse_rel._resolved_remote_key = local_key
+            reverse_rel.local_table_pk = target_mapper.pk
+            reverse_rel.remote_table_pk = self.pk
+
             if getattr(rel, "backref", None) and rel.backref not in target_mapper.relationships:
-                reverse_rel = Relationship(self.table_name, r_type="many-to-many", backref=name)
-                reverse_rel._resolved_target = self.cls
-                reverse_rel.local_table = target_mapper.table_name
-                reverse_rel.remote_table = self.table_name
-
-                reverse_rel.association_table = AssociationTable(
-                    name=table_name, local_key=remote_key, remote_key=local_key,
-                    local_table=target_mapper.table_name, remote_table=self.table_name,
-                    local_mapper=target_mapper, remote_mapper=self
-                )
-
-                reverse_rel._resolved_local_key = remote_key
-                reverse_rel._resolved_remote_key = local_key
-                reverse_rel.local_table_pk = target_mapper.pk
-                reverse_rel.remote_table_pk = self.pk
-
                 target_mapper.relationships[rel.backref] = reverse_rel
+            else:
+                target_mapper.relationships[self.table_name] = reverse_rel
         
         else:
             rel._resolved_fk_name = name
@@ -247,7 +245,6 @@ class Mapper:
         _visited.add(table_name)
 
         dependents = {}
-
         for rel in self.relationships.values():
             if getattr(rel, 'cascade_delete', True):
                 if rel.r_type in ['one-to-one', 'many-to-one'] and rel.remote_table == table_name:
@@ -261,7 +258,6 @@ class Mapper:
                 
                 elif rel.r_type == 'many-to-many':
                     association_table = rel.association_table
-                    print(f"DEBUG: Association Table: {association_table}")
                     name = association_table.name
                     if association_table.local_table == table_name:
                         key = association_table.local_key

@@ -94,10 +94,6 @@ class ClassTableInheritance(InheritanceStrategy):
             operations["_fk_from_previous"] = ops
 
         operations[mapper.table_name] = mapper._map_data_to_columns(entity)
-        # fks = {}
-        # for rel in mapper.relationships.values():
-        #     if rel.remote_table == mapper.table_name:
-        #         operations[mapper.table_name]["_fk_from_previous"] = getattr(entity, rel.remote_column)
         return operations
 
     def resolve_update(self, mapper, entity):
@@ -107,15 +103,17 @@ class ClassTableInheritance(InheritanceStrategy):
             operations.update(self.resolve_update(mapper.parent, entity))
 
         operations[mapper.table_name] = mapper._map_data_to_columns(entity)
-        operations[mapper.table_name]["_pk"] = {mapper.pk: getattr(entity, mapper.pk)}
+        pk_val = getattr(entity, entity._mapper.pk, None)
+        operations[mapper.table_name]["_pk"] = {mapper.pk: pk_val}
         return operations
 
     def resolve_delete(self, mapper, entity):
         operations = {}
 
         operations[mapper.table_name] = {}
-        operations[mapper.table_name][mapper.pk] = getattr(entity, mapper.pk)
-        
+        pk_val = getattr(entity, entity._mapper.pk, None)
+        operations[mapper.table_name][mapper.pk] = pk_val
+
         if mapper.parent:
             operations.update(self.resolve_delete(mapper.parent, entity))
 
@@ -171,9 +169,6 @@ STRATEGIES = {
 
 
 class Inheritance:
-    """
-    Wraps inheritance strategy and discriminator value.
-    """
     def __init__(self, strategy):
         self.strategy = strategy
     

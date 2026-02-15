@@ -81,6 +81,7 @@ def test_update():
     for person in people:
         person.last_name = "Majewski"
         session.update(person)
+    session.commit()
 
     students = session.query(Student).all()
     for student in students:

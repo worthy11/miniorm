@@ -1,14 +1,5 @@
-"""
-Advanced filter expressions for miniorm, similar to SQLAlchemy.
-Supports complex filtering without raw SQL.
-"""
-
-
 class FilterExpression:
-    """Base class for all filter expressions"""
-    
     def __invert__(self):
-        """Negate a filter using the ~ operator"""
         return NotFilter(self)
 
 

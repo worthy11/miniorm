@@ -22,8 +22,6 @@ class SchemaGenerator:
         m2m_tables = set()
 
         for mapper in registry.values():
-            if mapper.abstract:
-                continue
             name = mapper.table_name
             if name not in table_definitions:
                 table_definitions[name] = None
@@ -59,8 +57,6 @@ class SchemaGenerator:
 
         table_definitions = {}
         for mapper in registry.values():
-            if mapper.abstract:
-                continue
             name = mapper.table_name
             if name not in table_definitions:
                 table_definitions[name] = {

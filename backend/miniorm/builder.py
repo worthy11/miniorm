@@ -203,7 +203,6 @@ class QueryBuilder:
         params.append(pk_val)
 
         sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {self._quote(pk_col)} = ?"
-        print(f"DEBUG: UPDATE: {sql}")
         return sql, tuple(params)
 
     def build_delete(self, table_name, data):
@@ -220,7 +219,7 @@ class QueryBuilder:
         l_key = self._quote(local_key)
         r_key = self._quote(remote_key)
         sql = f"INSERT INTO {table} ({l_key}, {r_key}) VALUES (?, ?)"
-        print(f"DEBUG: M2M INSERT: {sql}")
+        # print(f"DEBUG: M2M INSERT: {sql}")
         return sql, (local_id, remote_id)
         
     def build_m2m_delete(self, assoc_table, local_id, remote_id, local_key, remote_key):
@@ -228,14 +227,5 @@ class QueryBuilder:
         l_key = self._quote(local_key)
         r_key = self._quote(remote_key)
         sql = f"DELETE FROM {table} WHERE {l_key} = ? AND {r_key} = ?"
-        print(f"DEBUG: M2M DELETE: {sql}")
+        # print(f"DEBUG: M2M DELETE: {sql}")
         return sql, (local_id, remote_id)
-    
-    def build_m2m_cleanup(self, assoc_table, local_id, local_key):
-        table = self._quote(assoc_table)
-        l_key = self._quote(local_key)
-        
-        sql = f"DELETE FROM {table} WHERE {l_key} = ?"
-        
-        print(f"DEBUG: M2M CLEANUP: {sql}")
-        return sql, (local_id,)

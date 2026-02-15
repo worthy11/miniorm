@@ -15,23 +15,12 @@ class Query:
         self._order_by = []
 
     def filter(self, *args, **kwargs):
-        """
-        Apply filters to the query.
-        
-        Supports multiple styles:
-        - Simple equality: filter(name='John', age=30)
-        - Advanced expressions: filter(col('age') > 30)
-        - Multiple expressions: filter(col('age') > 30, col('name').like('%John%'))
-        - Combined expressions: filter((col('age') > 30) & (col('status') == 'active'))
-        """
-        # Handle filter expressions
         for arg in args:
             if isinstance(arg, FilterExpression):
                 self.filter_expressions.append(arg)
             else:
                 raise TypeError(f"Expected FilterExpression, got {type(arg)}")
         
-        # Handle simple keyword filters
         if kwargs:
             self.filters.update(kwargs)
         
@@ -79,6 +68,9 @@ class Query:
                     if existing:
                         if getattr(existing, '_orm_state', None) == ObjectState.DELETED:
                             continue
+                        for col in obj._mapper.columns:
+                            if col in obj.__dict__:
+                                object.__setattr__(existing, col, obj.__dict__[col])
                         results.append(existing)
                         continue
                 
