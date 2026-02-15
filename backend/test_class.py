@@ -24,7 +24,7 @@ class Student(Person):
     age = Number()
     index = Text()
     person_id = Relationship(pk=True, target="persons", r_type="one-to-one", cascade_delete=True)
-    # subjects = Relationship("subjects", r_type="many-to-many", cascade_delete=True)
+    subjects = Relationship("subjects", r_type="many-to-many", cascade_delete=True)
     
     def __repr__(self):
         return f"<Student(id={self.person_id}, first_name={self.first_name}, last_name={self.last_name}, age={self.age}, index={self.index})>"
@@ -44,7 +44,7 @@ class Employee(Person):
 class Subject(MiniBase):
     subject_id = Number(pk=True)
     name = Text()
-    student = Relationship("students", backref="subjects", r_type="many-to-one", cascade_delete=True)
+    # student = Relationship("students", backref="subjects", r_type="many-to-one", cascade_delete=True)
 
     class Meta:
         table_name = "subjects"
@@ -77,8 +77,8 @@ def test_select():
 
 def test_insert():
     person = Person(first_name="Krzysztof", last_name="Kowalski")
-    student = Student(first_name="John", last_name="Doe", age=20, index="123456")
-    subject = Subject(name="Computer Science", student=student)
+    subjects = [Subject(name="Computer Science"), Subject(name="Mathematics")]
+    student = Student(first_name="John", last_name="Doe", age=20, index="123456", subjects=subjects)
     employee = Employee(first_name="Jane", last_name="Smith", salary=50000, position="Manager")
 
     print(f"DEBUG: Inserting people...")
@@ -89,13 +89,13 @@ def test_insert():
     session.add(student)
     session.commit()
 
-    # print(f"DEBUG: Inserting employee...")
-    # session.add(employee)
-    # session.commit()
-
-    print(f"DEBUG: Inserting subject...")
-    session.add(subject)
+    print(f"DEBUG: Inserting employee...")
+    session.add(employee)
     session.commit()
+
+    # print(f"DEBUG: Inserting subject...")
+    # session.add(subject)
+    # session.commit()
 
 def test_update():
     print(f"DEBUG: Updating people...")
@@ -110,8 +110,7 @@ def test_update():
     subjects = session.query(Subject).all()
     for student in students:
         student.first_name = "Max"
-        for sub in subjects:
-            sub.name = sub.name + "1"
+        student.subjects = [subjects[0]]
         session.update(student)
     session.commit()
 
@@ -131,8 +130,8 @@ generator.create_all(engine, MiniBase._registry, drop_first=True)
 
 with Session(engine) as session:
     test_insert()
+    test_update()
     test_select()
     print("--------------------------------")
-    # test_update()
     # test_select()
     # test_delete()

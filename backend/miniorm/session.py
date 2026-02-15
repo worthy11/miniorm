@@ -159,7 +159,7 @@ class Session:
                 state = getattr(entity, '_orm_state', None)
                 if state == ObjectState.DELETED:
                     continue
-                # self._flush_m2m(entity)
+                self._flush_m2m(entity)
 
             self._processed_transactions = []
 

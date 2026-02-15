@@ -53,6 +53,10 @@ class Query:
         return self
     
     def all(self):
+        results = getattr(self, '_results', None)
+        if results is not None:
+            del self._results
+            return results
         self.session._autoflush()
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(

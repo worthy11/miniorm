@@ -70,6 +70,9 @@ class MiniBase:
                 if session:
                     value = self._load_relationship(session, rel)
                     object.__setattr__(self, name, value)
+                    # Update snapshot after loading M2M/collection so _flush_m2m can diff correctly
+                    if rel.r_type in ("one-to-many", "many-to-many") and isinstance(value, list):
+                        session._take_snapshot(self)
                     return value
                 else:
                     # No session yet - return empty list for collections, None for many-to-one
