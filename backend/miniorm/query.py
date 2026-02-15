@@ -54,7 +54,6 @@ class Query:
     
     def all(self):
         self.session._autoflush()
-        print(f"DEBUG: Filters: {self.filters}")
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
             mapper, self.filters, filter_expressions=self.filter_expressions,

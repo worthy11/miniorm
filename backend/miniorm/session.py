@@ -59,8 +59,6 @@ class Session:
                         if hasattr(item, '_mapper'):
                             self.add(item)
             self.unit_of_work.append(InsertTransaction(self, entity))
-            
-            # self._cascade_add(entity)
 
     def update(self, entity):
         state = getattr(entity, '_orm_state', None)
@@ -129,10 +127,10 @@ class Session:
                 operations = transaction.prepare()
                 
                 current_id = None
+                first_insert_done = False
                 for op in operations:
                     table_name, data = op["table_name"], op["data"]
                     if transaction_type == InsertTransaction:
-                        # jeżeli to jest insert z CLASS inheritance, to potrzebujemy pk rodzica
                         fk_col = op.get("fk_col")
                         if fk_col:
                             if isinstance(fk_col, tuple):
@@ -150,6 +148,9 @@ class Session:
                     current_id = self.engine.execute(
                         sql, params, return_lastrowid=(transaction_type == InsertTransaction)
                     )
+                    if transaction_type == InsertTransaction and current_id is not None and not first_insert_done:
+                        object.__setattr__(transaction.entity, transaction.entity._mapper.pk, current_id)
+                        first_insert_done = True
 
                 entities_to_sync.add(transaction.entity)
 

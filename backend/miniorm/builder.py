@@ -25,7 +25,8 @@ class QueryBuilder:
                 columns.pop("_join")
 
             cols.update({col: table_name for col in columns})
-        
+
+        # Ensure filter columns exist in cols (e.g. FK columns from relationships)
         if joins:
             for i, rel in enumerate(joins):
                 target_mapper = rel._resolved_target._mapper
@@ -60,8 +61,9 @@ class QueryBuilder:
         # Process simple equality filters
         actual_filters = dict(filters)
         if actual_filters:
+            main_table = mapper.table_name
             for col, val in actual_filters.items():
-                table_name = cols[col]
+                table_name = cols.get(col, main_table)
                 prefixed_col = f"{table_name}.{self._quote(col)}"
 
                 if val is None:

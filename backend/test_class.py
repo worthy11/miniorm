@@ -24,7 +24,7 @@ class Student(Person):
     age = Number()
     index = Text()
     person_id = Relationship(pk=True, target="persons", r_type="one-to-one", cascade_delete=True)
-    subjects = Relationship("subjects", r_type="many-to-many", cascade_delete=True)
+    # subjects = Relationship("subjects", r_type="many-to-many", cascade_delete=True)
     
     def __repr__(self):
         return f"<Student(id={self.person_id}, first_name={self.first_name}, last_name={self.last_name}, age={self.age}, index={self.index})>"
@@ -44,7 +44,7 @@ class Employee(Person):
 class Subject(MiniBase):
     subject_id = Number(pk=True)
     name = Text()
-    # student = Relationship("students", r_type="many-to-one", cascade_delete=True)
+    student = Relationship("students", backref="subjects", r_type="many-to-one", cascade_delete=True)
 
     class Meta:
         table_name = "subjects"
@@ -63,6 +63,7 @@ def test_select():
     students = session.query(Student).order_by(Student.last_name).all()
     for student in students:
         print(student)
+        print(student.subjects)
 
     print(f"DEBUG: Selecting employees...")
     employees = session.query(Employee).order_by(Employee.salary, "DESC").all()
@@ -76,8 +77,8 @@ def test_select():
 
 def test_insert():
     person = Person(first_name="Krzysztof", last_name="Kowalski")
-    subjects = [Subject(name="Math"), Subject(name="Science"), Subject(name="History")]
-    student = Student(first_name="John", last_name="Doe", age=20, index="123456", subjects=subjects)
+    student = Student(first_name="John", last_name="Doe", age=20, index="123456")
+    subject = Subject(name="Computer Science", student=student)
     employee = Employee(first_name="Jane", last_name="Smith", salary=50000, position="Manager")
 
     print(f"DEBUG: Inserting people...")
@@ -88,11 +89,10 @@ def test_insert():
     session.add(student)
     session.commit()
 
-    print(f"DEBUG: Inserting employee...")
-    session.add(employee)
-    session.commit()
+    # print(f"DEBUG: Inserting employee...")
+    # session.add(employee)
+    # session.commit()
 
-    subject = Subject(name="Computer Science")
     print(f"DEBUG: Inserting subject...")
     session.add(subject)
     session.commit()
@@ -133,6 +133,6 @@ with Session(engine) as session:
     test_insert()
     test_select()
     print("--------------------------------")
-    test_update()
-    test_select()
-    test_delete()
+    # test_update()
+    # test_select()
+    # test_delete()

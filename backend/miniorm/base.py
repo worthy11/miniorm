@@ -102,36 +102,63 @@ class MiniBase:
         return val
 
     def _load_relationship(self, session, rel):
-        print(f"DEBUG: Loading relationship {rel} for {self}...")
+        from miniorm.orm_types import Column, Relationship
+
         target_cls = rel._resolved_target
         if not target_cls:
             return None
 
-        session._internal_loading = True
+        # Resolve our PK safely (never raise; avoid descriptor/Column)
+        pk_val = self.__dict__.get(self._mapper.pk)
+        if pk_val is not None and isinstance(pk_val, (Column, Relationship)):
+            pk_val = None
+
+        # many-to-one: we hold the FK -> load the single related object.
+        # If we don't have this FK column, we're the "one" side (backref) -> load collection.
+        if rel.r_type == "many-to-one":
+            fk_name = getattr(rel, "_resolved_fk_name", None)
+            if fk_name and fk_name in self._mapper.columns:
+                fk_val = self.__dict__.get(fk_name)
+                if fk_val is not None and not isinstance(fk_val, (Column, Relationship, list)):
+                    if hasattr(fk_val, "_mapper"):
+                        fk_val = getattr(fk_val, fk_val._mapper.pk, None)
+                    if fk_val is not None:
+                        session._is_loading = True
+                        try:
+                            return session.get(target_cls, fk_val)
+                        finally:
+                            session._is_loading = False
+            # Reverse side (one side): load collection by our PK. Query the class that
+            # declared the relationship (e.g. Subject), not _resolved_target (Student).
+            if pk_val is None or not fk_name:
+                return []
+            query_cls = getattr(rel, "_backref_owner", None) or target_cls
+            session._is_loading = True
+            try:
+                return session.query(query_cls).filter(**{fk_name: pk_val}).all()
+            finally:
+                session._is_loading = False
+
+        # one-to-many or many-to-many: we're the "one" side, use our PK
+        if pk_val is None:
+            return [] if rel.r_type in ("one-to-many", "many-to-many") else None
+
+        session._is_loading = True
         try:
-            if rel.r_type == "many-to-one":
-                fk_val = object.__getattribute__(self, rel._resolved_fk_name)
-                from miniorm.orm_types import Column
-                if isinstance(fk_val, (Column, type(rel))) or fk_val is None:
-                    return None
-                
-                return session.get(rel._resolved_target, fk_val)
-            
-            pk_val = object.__getattribute__(self, self._mapper.pk)
-            from miniorm.orm_types import Column
-            if isinstance(pk_val, Column) or pk_val is None:
-                return [] if rel.r_type in ("one-to-many", "many-to-many") else None
-
             if rel.r_type == "one-to-many":
-                return session.query(target_cls).filter(**{rel._resolved_fk_name: pk_val}).all()
-
+                fk_name = getattr(rel, "_resolved_fk_name", None)
+                if not fk_name:
+                    return []
+                return session.query(target_cls).filter(**{fk_name: pk_val}).all()
             if rel.r_type == "many-to-many":
-                assoc = rel.association_table
+                assoc = getattr(rel, "association_table", None)
+                if not assoc:
+                    return []
                 return session.query(target_cls).join_m2m(
                     assoc.name, assoc.local_key, assoc.remote_key, pk_val
                 ).all()
         finally:
-            session._internal_loading = False
+            session._is_loading = False
         return None
     
     def __setattr__(self, name, value):

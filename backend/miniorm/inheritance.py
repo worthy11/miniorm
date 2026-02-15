@@ -58,7 +58,7 @@ class SingleTableInheritance(InheritanceStrategy):
 
     def resolve_delete(self, mapper, entity):
         operations = {mapper.table_name: {}}
-        operations[mapper.table_name]["_pk"] = {mapper.pk: getattr(entity, mapper.pk)}
+        operations[mapper.table_name][mapper.pk] = getattr(entity, mapper.pk)
         return operations
 
     def resolve_target_class(self, mapper, row_dict):
@@ -94,6 +94,10 @@ class ClassTableInheritance(InheritanceStrategy):
             operations["_fk_from_previous"] = ops
 
         operations[mapper.table_name] = mapper._map_data_to_columns(entity)
+        # fks = {}
+        # for rel in mapper.relationships.values():
+        #     if rel.remote_table == mapper.table_name:
+        #         operations[mapper.table_name]["_fk_from_previous"] = getattr(entity, rel.remote_column)
         return operations
 
     def resolve_update(self, mapper, entity):
@@ -110,7 +114,7 @@ class ClassTableInheritance(InheritanceStrategy):
         operations = {}
 
         operations[mapper.table_name] = {}
-        operations[mapper.table_name]["_pk"] = {mapper.pk: getattr(entity, mapper.pk)}
+        operations[mapper.table_name][mapper.pk] = getattr(entity, mapper.pk)
         
         if mapper.parent:
             operations.update(self.resolve_delete(mapper.parent, entity))

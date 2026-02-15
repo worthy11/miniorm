@@ -105,4 +105,4 @@ with Session(engine) as session:
     print("--------------------------------")
     test_update()
     test_select()
-    # test_delete()
+    test_delete()

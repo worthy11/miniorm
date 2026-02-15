@@ -156,6 +156,7 @@ class Mapper:
                 raise ValueError(f"Backref '{backref_name}' already exists on {target_cls.__name__}")
 
             if getattr(rel, "backref", None):
+                rel._backref_owner = self.cls  # class that declared the rel (e.g. Subject); used when loading collection from "one" side
                 target_mapper.relationships[backref_name] = rel
             else:
                 target_mapper.relationships[self.table_name] = rel
@@ -170,6 +171,10 @@ class Mapper:
                 if hasattr(val, '_mapper'):
                     target_pk = val._mapper.pk
                     val = getattr(val, target_pk, None)
+                    if val is not None:
+                        object.__setattr__(entity, attr, val)
+                if isinstance(val, list):
+                    val = None
 
                 if val is not None:
                     mapped_data[attr] = val
@@ -228,99 +233,10 @@ class Mapper:
         return self.inheritance.strategy.resolve_select(self)
 
     def prepare_insert(self, entity):
-        # table_name = self.table_name
-        # if _visited is None:
-        #     _visited = set()
-        # if table_name in _visited:
-        #     return {}
-        # _visited.add(table_name)
-
-        # dependents = {}
-        # inserts = []
-        # for entity in entities:
-        #     print(f"DEBUG: Entity: {entity}")
-        #     for attr in entity.__dict__:
-        #         print(f"DEBUG: Attribute: {attr}")
-        #         if attr in self.relationships:
-        #             rel = self.relationships[attr]
-        #             print(f"DEBUG: Relationship: {rel.local_table}, {table_name}")
-        #             if rel.r_type in ['one-to-one', 'many-to-one'] and rel.local_table == table_name:
-        #                 target_cls = rel._resolved_target
-        #                 target_mapper = target_cls._mapper
-
-        #                 new_entity = getattr(entity, attr)
-        #                 dependents.update(target_mapper.prepare_insert([new_entity], _visited))
-
-        #                 fk_name = rel._resolved_fk_name
-        #                 deps = dependents.pop("_fk_from_previous", [])
-        #                 deps.extend({table_name: fk_name})
-        #                 dependents["_fk_from_previous"] = deps
-
-        #             elif rel.r_type == 'many-to-many':
-        #                 association_table = rel.association_table
-        #                 print(f"DEBUG: Association table: {association_table}")
-        #                 if association_table.local_table == table_name:
-        #                     remote_mapper = association_table.remote_mapper
-
-        #                     new_entities = getattr(entity, attr)
-        #                     dependents.update(remote_mapper.prepare_insert(new_entities, _visited))
-                            
-        #                     local_key = association_table.local_key
-        #                     remote_key = association_table.remote_key
-
-        #                     deps = dependents.pop("_fk_from_previous", {})
-        #                     deps.extend({table_name: (local_key, remote_key)})
-        #                     dependents["_fk_from_previous"] = deps
-
-        #     inserts.append(self._map_data_to_columns(entity))
-        #     inheritance_inserts = self.inheritance.strategy.resolve_insert(self, entity)
-
-        #     for table, data in inheritance_inserts.items():
-        #         deps = dependents.pop(table, {})
-        #         deps.extend(data)
-        #         dependents[table] = deps
-        # dependents[table_name] = inserts
-        # print(f"DEBUG: Inserts: {inserts}")
-        # return dependents
         return self.inheritance.strategy.resolve_insert(self, entity)
     
     def prepare_update(self, entity, old_state):
         return self.inheritance.strategy.resolve_update(self, entity)
-        # table_name = self.table_name
-        # if _visited is None:
-        #     _visited = set()
-        # if table_name in _visited:
-        #     return {}
-        # _visited.add(table_name)
-
-        # for entity, old_state in zip(entities, old_states):
-        #     dependents = {}
-        #     print(f"DEBUG: Entity: {entity}, Old state: {old_state}")
-        #     for attr in entity.__dict__:
-        #         if attr in self.relationships:
-        #             rel = self.relationships[attr]
-        #             if rel.r_type in ['one-to-one', 'many-to-one'] and rel.local_table == table_name:
-        #                 target_cls = rel._resolved_target
-        #                 target_mapper = target_cls._mapper
-
-        #                 new_entity = getattr(entity, attr)
-        #                 dependents.update(target_mapper.prepare_update([new_entity], [old_state.get(attr)], _visited))
-
-        #             elif rel.r_type == 'many-to-many':
-        #                 association_table = rel.association_table
-        #                 print(f"DEBUG: Association table: {association_table}")
-        #                 if association_table.local_table == table_name:
-        #                     remote_mapper = association_table.remote_mapper
-
-        #                     new_entities = getattr(entity, attr)
-        #                     old_entities = [old.get(attr) for old in old_states]
-        #                     dependents.update(remote_mapper.prepare_update(new_entities, old_entities, _visited))
-                            
-        #     updates = dependents.get(table_name, [])
-        #     updates.append(self._map_data_to_columns(entity))
-        #     updates[-1]["_pk"] = {self.pk: getattr(entity, self.pk)}
-        #     dependents[table_name] = updates
-        # return dependents
     
     def prepare_delete(self, entity, _visited=None):
         table_name = self.table_name
@@ -353,9 +269,10 @@ class Mapper:
                         key = association_table.remote_key
                     dependents[name] = {key: getattr(entity, entity._mapper.pk)}
         
-        deletes = dependents.get(table_name, [])
-        deletes.append({self.pk: getattr(entity, self.pk)})
+        deletes = dependents.get(table_name, {})
+        deletes[self.pk] = getattr(entity, self.pk)
         dependents[table_name] = deletes
+        dependents.update(self.inheritance.strategy.resolve_delete(self, entity))
         return dependents
     
     def hydrate(self, row_dict):

@@ -12,7 +12,7 @@ class InsertTransaction(Transaction):
         mapper = self.entity._mapper
 
         operations = mapper.prepare_insert(self.entity)
-        # print(f"DEBUG: Insert operations: {operations}")
+        print(f"DEBUG: Insert operations: {operations}")
         fk_from_previous = operations.pop("_fk_from_previous", None)  # { table_name: fk_column_name }
 
         return [{"table_name": table_name, "data": data, "fk_col": fk_from_previous.get(table_name) if fk_from_previous else None} for table_name, data in operations.items()]
