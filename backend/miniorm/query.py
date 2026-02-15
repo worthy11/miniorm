@@ -53,9 +53,8 @@ class Query:
         return self
     
     def all(self):
-        if hasattr(self.session, '_autoflush'):
-            self.session._autoflush()
-            
+        self.session._autoflush()
+        print(f"DEBUG: Filters: {self.filters}")
         mapper = MiniBase._registry.get(self.model_class)
         sql, params = self.session.query_builder.build_select(
             mapper, self.filters, filter_expressions=self.filter_expressions,

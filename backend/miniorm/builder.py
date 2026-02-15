@@ -177,7 +177,6 @@ class QueryBuilder:
             raise TypeError(f"Unknown filter expression type: {type(expr)}")
 
     def build_insert(self, table_name, data):
-        """Build INSERT SQL from table name and data dict. Does not use mapper."""
         table = self._quote(table_name)
         fields = list(data.keys())
         quoted_fields = [self._quote(f) for f in fields]
@@ -187,7 +186,6 @@ class QueryBuilder:
         return sql, tuple(values)
     
     def build_update(self, table_name, data):
-        print(f"DEBUG: UPDATE: {data}")
         table = self._quote(table_name)
         set_parts = []
         params = []
@@ -207,15 +205,12 @@ class QueryBuilder:
         return sql, tuple(params)
 
     def build_delete(self, table_name, data):
-        where_parts = []
         params = []
 
-        pk_info = data["_pk"]
-        pk_col, pk_val = list(pk_info.items())[0]
-        params.append(pk_val)
+        col, val = list(data.items())[0]
+        params.append(val)
         
-        sql = f"DELETE FROM {table_name} WHERE {self._quote(pk_col)} = ?"
-        print(f"DEBUG: DELETE: {sql}")
+        sql = f"DELETE FROM {table_name} WHERE {self._quote(col)} = ?"
         return sql, tuple(params)
 
     def build_m2m_insert(self, assoc_table, local_id, remote_id, local_key, remote_key):

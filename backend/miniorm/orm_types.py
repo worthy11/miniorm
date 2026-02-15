@@ -1,10 +1,12 @@
 class AssociationTable:
-    def __init__(self, name, local_key, remote_key, local_table=None, remote_table=None):
+    def __init__(self, name, local_key, remote_key, local_table=None, remote_table=None, local_mapper=None, remote_mapper=None):
         self.name = name
         self.local_key = local_key
         self.remote_key = remote_key
         self.local_table = local_table
         self.remote_table = remote_table
+        self.local_mapper = local_mapper
+        self.remote_mapper = remote_mapper
 
     def __repr__(self):
         return f"<AssociationTable {self.name}({self.local_key}, {self.remote_key})>"

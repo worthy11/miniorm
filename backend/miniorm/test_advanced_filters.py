@@ -52,7 +52,7 @@ class Animal(MiniBase):
 
 
 class Dog(Animal):
-    id = Relationship(Animal, r_type="many-to-one")
+    id = Relationship(pk=True, target="animals", r_type="many-to-one")
     breed = Text()
     class Meta:
         inheritance = "class"
@@ -60,7 +60,7 @@ class Dog(Animal):
         
 
 class Cat(Animal):
-    id = Relationship(Animal, r_type="many-to-one")
+    id = Relationship(pk=True, target="animals", r_type="many-to-one")
     color = Text()
     class Meta:
         inheritance = "class"

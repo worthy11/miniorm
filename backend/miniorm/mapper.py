@@ -82,8 +82,6 @@ class Mapper:
         pk_cols = [name for name, col in self.columns.items() if col.pk]
         if pk_cols:
             self.pk = pk_cols[0]
-        elif self.parent:
-            self.pk = self.parent.pk
         else:
             raise Exception(f"Class {self.cls.__name__} has no primary key defined")
     
@@ -107,8 +105,10 @@ class Mapper:
         if rel.r_type == "many-to-many":
             tables = sorted([self.table_name, target_mapper.table_name])
             table_name = "_".join(tables)
+
             local_key = f"{self.table_name.rstrip('s')}_id"
             remote_key = f"{target_mapper.table_name.rstrip('s')}_id"
+
             rel.local_table = self.table_name
             rel.remote_table = target_mapper.table_name
             rel.local_table_pk = self.pk
@@ -116,8 +116,10 @@ class Mapper:
 
             rel.association_table = AssociationTable(
                 name=table_name, local_key=local_key, remote_key=remote_key,
-                local_table=self.table_name, remote_table=target_mapper.table_name
+                local_table=self.table_name, remote_table=target_mapper.table_name,
+                local_mapper=self, remote_mapper=target_mapper
             )
+
             rel._resolved_local_key = local_key
             rel._resolved_remote_key = remote_key
 
@@ -129,12 +131,15 @@ class Mapper:
 
                 reverse_rel.association_table = AssociationTable(
                     name=table_name, local_key=remote_key, remote_key=local_key,
-                    local_table=target_mapper.table_name, remote_table=self.table_name
+                    local_table=target_mapper.table_name, remote_table=self.table_name,
+                    local_mapper=target_mapper, remote_mapper=self
                 )
+
                 reverse_rel._resolved_local_key = remote_key
                 reverse_rel._resolved_remote_key = local_key
                 reverse_rel.local_table_pk = target_mapper.pk
                 reverse_rel.remote_table_pk = self.pk
+
                 target_mapper.relationships[rel.backref] = reverse_rel
         
         else:
@@ -146,48 +151,14 @@ class Mapper:
                             on_delete_cascade=getattr(rel, 'cascade_delete', True))
             self.columns[name] = fk
             
-            if getattr(rel, "backref", None) and rel.r_type == "many-to-one":
-                backref_name = rel.backref
-                if backref_name in target_mapper.relationships:
-                    raise ValueError(f"Backref '{backref_name}' already exists on {target_cls.__name__}")
-                reverse_rel = Relationship(self.table_name, r_type="one-to-many")
-                reverse_rel._resolved_target = self.cls
-                reverse_rel._resolved_fk_name = name
-                reverse_rel.local_table = target_mapper.table_name
-                reverse_rel.remote_table = self.table_name
-                target_mapper.relationships[backref_name] = reverse_rel
+            backref_name = rel.backref
+            if backref_name in target_mapper.relationships:
+                raise ValueError(f"Backref '{backref_name}' already exists on {target_cls.__name__}")
+
+            if getattr(rel, "backref", None):
+                target_mapper.relationships[backref_name] = rel
             else:
                 target_mapper.relationships[self.table_name] = rel
-
-    @staticmethod
-    def finalize_mappers():
-        from miniorm.base import MiniBase
-        
-        for mapper in MiniBase._registry.values():
-            resolved = []
-            for name, rel in mapper._pending_relationships:
-                target_cls = mapper._resolve_target_class(rel.target_table)
-                if target_cls is not None:
-                    mapper._apply_relationship(name, rel, target_cls, target_cls._mapper)
-                    resolved.append((name, rel))
-            for item in resolved:
-                mapper._pending_relationships.remove(item)
-        
-        for mapper in MiniBase._registry.values():
-            if mapper._pending_relationships:
-                pending = [(n, r.target_table) for n, r in mapper._pending_relationships]
-                raise ValueError(f"Cannot resolve relationship target(s) after all models loaded: {mapper.cls.__name__} pending: {pending}")
-        
-        for mapper in MiniBase._registry.values():
-            mapper._resolve_pk()
-        
-        for mapper in MiniBase._registry.values():
-            if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
-                if mapper.parent and not any(
-                    getattr(rel, "_resolved_target", None) and getattr(rel._resolved_target, "_mapper", None) and rel._resolved_target._mapper.table_name == mapper.parent.table_name
-                    for rel in mapper.relationships.values()
-                ):
-                    raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
 
 
     def _map_data_to_columns(self, entity):
@@ -223,79 +194,169 @@ class Mapper:
                 return name
         return None
 
-    def _collect_cascade_dependents(self, entity):
-        if _visited is None:
-            _visited = set()
-        if id(entity) in _visited:
-            return []
-        _visited.add(id(entity))
-        out = []
-        mapper = entity._mapper
+    @staticmethod
+    def finalize_mappers():
+        from miniorm.base import MiniBase
         
-        entity_pk = getattr(entity, mapper.pk, None)
-        if entity_pk is None:
-            return [entity]
-
-        target_tables = {mapper.table_name}
-        if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS" and mapper.parent:
-            target_tables.add(mapper.parent.table_name)
+        for mapper in MiniBase._registry.values():
+            resolved = []
+            for name, rel in mapper._pending_relationships:
+                target_cls = mapper._resolve_target_class(rel.target_table)
+                if target_cls is not None:
+                    mapper._apply_relationship(name, rel, target_cls, target_cls._mapper)
+                    resolved.append((name, rel))
+            for item in resolved:
+                mapper._pending_relationships.remove(item)
         
-        for other_mapper in MiniBase._registry.values():
-            if other_mapper.cls is entity.__class__:
-                continue
-            for rel in other_mapper.relationships.values():
-                if not getattr(rel, 'cascade_delete', True):
-                    continue
-                if rel.r_type not in ('many-to-one', 'one-to-one'):
-                    continue
-                if not getattr(rel, '_resolved_target', None):
-                    continue
-                
-                fk_target_table = getattr(rel, 'remote_table', None)
-                if not fk_target_table:
-                    fk_target_table = rel._resolved_target._mapper.table_name
-                
-                if fk_target_table not in target_tables:
-                    continue
-                
-                fk_name = getattr(rel, '_resolved_fk_name', None)
-                if not fk_name:
-                    continue
-                self._is_loading = True
-                try:
-                    refs = self.query(other_mapper.cls).filter(**{fk_name: entity_pk}).all()
-                finally:
-                    self._is_loading = False
-                for ref in refs:
-                    out.extend(self._collect_cascade_dependents(ref, _visited))
-        out.append(entity)
-        return out
-
+        for mapper in MiniBase._registry.values():
+            if mapper._pending_relationships:
+                pending = [(n, r.target_table) for n, r in mapper._pending_relationships]
+                raise ValueError(f"Cannot resolve relationship target(s) after all models loaded: {mapper.cls.__name__} pending: {pending}")
+        
+        for mapper in MiniBase._registry.values():
+            mapper._resolve_pk()
+        
+        for mapper in MiniBase._registry.values():
+            if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
+                if mapper.parent and not any(
+                    getattr(rel, "_resolved_target", None) and getattr(rel._resolved_target, "_mapper", None) and rel._resolved_target._mapper.table_name == mapper.parent.table_name
+                    for rel in mapper.relationships.values()
+                ):
+                    raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
+                    
     def prepare_select(self):
         return self.inheritance.strategy.resolve_select(self)
 
     def prepare_insert(self, entity):
+        # table_name = self.table_name
+        # if _visited is None:
+        #     _visited = set()
+        # if table_name in _visited:
+        #     return {}
+        # _visited.add(table_name)
+
+        # dependents = {}
+        # inserts = []
+        # for entity in entities:
+        #     print(f"DEBUG: Entity: {entity}")
+        #     for attr in entity.__dict__:
+        #         print(f"DEBUG: Attribute: {attr}")
+        #         if attr in self.relationships:
+        #             rel = self.relationships[attr]
+        #             print(f"DEBUG: Relationship: {rel.local_table}, {table_name}")
+        #             if rel.r_type in ['one-to-one', 'many-to-one'] and rel.local_table == table_name:
+        #                 target_cls = rel._resolved_target
+        #                 target_mapper = target_cls._mapper
+
+        #                 new_entity = getattr(entity, attr)
+        #                 dependents.update(target_mapper.prepare_insert([new_entity], _visited))
+
+        #                 fk_name = rel._resolved_fk_name
+        #                 deps = dependents.pop("_fk_from_previous", [])
+        #                 deps.extend({table_name: fk_name})
+        #                 dependents["_fk_from_previous"] = deps
+
+        #             elif rel.r_type == 'many-to-many':
+        #                 association_table = rel.association_table
+        #                 print(f"DEBUG: Association table: {association_table}")
+        #                 if association_table.local_table == table_name:
+        #                     remote_mapper = association_table.remote_mapper
+
+        #                     new_entities = getattr(entity, attr)
+        #                     dependents.update(remote_mapper.prepare_insert(new_entities, _visited))
+                            
+        #                     local_key = association_table.local_key
+        #                     remote_key = association_table.remote_key
+
+        #                     deps = dependents.pop("_fk_from_previous", {})
+        #                     deps.extend({table_name: (local_key, remote_key)})
+        #                     dependents["_fk_from_previous"] = deps
+
+        #     inserts.append(self._map_data_to_columns(entity))
+        #     inheritance_inserts = self.inheritance.strategy.resolve_insert(self, entity)
+
+        #     for table, data in inheritance_inserts.items():
+        #         deps = dependents.pop(table, {})
+        #         deps.extend(data)
+        #         dependents[table] = deps
+        # dependents[table_name] = inserts
+        # print(f"DEBUG: Inserts: {inserts}")
+        # return dependents
         return self.inheritance.strategy.resolve_insert(self, entity)
     
     def prepare_update(self, entity, old_state):
-        operations = self.inheritance.strategy.resolve_update(self, entity)
-        if old_state:
-            for table_name in list(operations.keys()):
-                print(f"DEBUG: OLD STATE: {old_state}")
-                data = operations[table_name]
-                filtered = {
-                    k: v for k, v in data.items()
-                    if old_state.get(k) != v
-                }
-                # nic nie zostało do zmiany
-                if len(filtered) == 1 and "_pk" in filtered:
-                    operations.pop(table_name)
-                else:
-                    operations[table_name] = filtered
-        return operations   
+        return self.inheritance.strategy.resolve_update(self, entity)
+        # table_name = self.table_name
+        # if _visited is None:
+        #     _visited = set()
+        # if table_name in _visited:
+        #     return {}
+        # _visited.add(table_name)
+
+        # for entity, old_state in zip(entities, old_states):
+        #     dependents = {}
+        #     print(f"DEBUG: Entity: {entity}, Old state: {old_state}")
+        #     for attr in entity.__dict__:
+        #         if attr in self.relationships:
+        #             rel = self.relationships[attr]
+        #             if rel.r_type in ['one-to-one', 'many-to-one'] and rel.local_table == table_name:
+        #                 target_cls = rel._resolved_target
+        #                 target_mapper = target_cls._mapper
+
+        #                 new_entity = getattr(entity, attr)
+        #                 dependents.update(target_mapper.prepare_update([new_entity], [old_state.get(attr)], _visited))
+
+        #             elif rel.r_type == 'many-to-many':
+        #                 association_table = rel.association_table
+        #                 print(f"DEBUG: Association table: {association_table}")
+        #                 if association_table.local_table == table_name:
+        #                     remote_mapper = association_table.remote_mapper
+
+        #                     new_entities = getattr(entity, attr)
+        #                     old_entities = [old.get(attr) for old in old_states]
+        #                     dependents.update(remote_mapper.prepare_update(new_entities, old_entities, _visited))
+                            
+        #     updates = dependents.get(table_name, [])
+        #     updates.append(self._map_data_to_columns(entity))
+        #     updates[-1]["_pk"] = {self.pk: getattr(entity, self.pk)}
+        #     dependents[table_name] = updates
+        # return dependents
     
-    def prepare_delete(self, entity):
-        return self.inheritance.strategy.resolve_delete(self, entity)
+    def prepare_delete(self, entity, _visited=None):
+        table_name = self.table_name
+        if _visited is None:
+            _visited = set()
+        if table_name in _visited:
+            return {}
+        _visited.add(table_name)
+
+        dependents = {}
+
+        for rel in self.relationships.values():
+            if getattr(rel, 'cascade_delete', True):
+                if rel.r_type in ['one-to-one', 'many-to-one'] and rel.remote_table == table_name:
+                    fk_name = rel._resolved_fk_name
+                    fk_value = getattr(entity, entity._mapper.pk)
+                    target_cls = rel._resolved_target
+
+                    target_mapper = target_cls._mapper
+                    dependents[target_mapper.table_name] = {fk_name: fk_value}
+                    target_mapper.prepare_delete(entity, _visited)
+                
+                elif rel.r_type == 'many-to-many':
+                    association_table = rel.association_table
+                    print(f"DEBUG: Association Table: {association_table}")
+                    name = association_table.name
+                    if association_table.local_table == table_name:
+                        key = association_table.local_key
+                    else:
+                        key = association_table.remote_key
+                    dependents[name] = {key: getattr(entity, entity._mapper.pk)}
+        
+        deletes = dependents.get(table_name, [])
+        deletes.append({self.pk: getattr(entity, self.pk)})
+        dependents[table_name] = deletes
+        return dependents
     
     def hydrate(self, row_dict):
         target_cls = self.inheritance.strategy.resolve_target_class(self, row_dict)

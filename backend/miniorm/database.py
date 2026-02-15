@@ -17,6 +17,7 @@ class DatabaseEngine:
         self.logger.info(msg)
 
     def execute(self, sql, params=None, return_lastrowid=False):
+        self._log(sql, params)
         clean_params = []
         if params:
             for p in params:

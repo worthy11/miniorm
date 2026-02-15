@@ -1,42 +1,33 @@
 from miniorm.orm_types import Text
-from abc import ABC, abstractmethod
 
-class InheritanceStrategy(ABC):
+class InheritanceStrategy():
     name: str
 
-    @abstractmethod
     def resolve_columns(self, mapper):
         pass
 
-    @abstractmethod
     def resolve_table_name(self, mapper):
         pass
     
-    @abstractmethod
     def resolve_select(self, mapper):
         pass
 
-    @abstractmethod
     def resolve_insert(self, mapper, entity):
         """Return operations dict: table_name -> dict of fields to set."""
         pass
 
-    @abstractmethod
     def resolve_update(self, mapper, entity):
         """Return operations dict: table_name -> dict of fields (incl. _pk for WHERE)."""
         pass
     
-    @abstractmethod
     def resolve_delete(self, mapper, entity):
         """Return operations dict: table_name -> pk_value, optional _m2m_cleanup list."""
         pass
     
-    @abstractmethod
     def resolve_target_class(self, mapper, row_dict):
         """Return the model class to instantiate for this row (for hydration)."""
         pass
 
-    @abstractmethod
     def resolve_attributes(self, mapper):
         pass
 
@@ -98,9 +89,9 @@ class ClassTableInheritance(InheritanceStrategy):
 
         if mapper.parent:
             operations.update(self.resolve_insert(mapper.parent, entity))
-            ops = operations.pop("_fk_from_parent", {})
+            ops = operations.pop("_fk_from_previous", {})
             ops.update({mapper.table_name: mapper.pk})
-            operations["_fk_from_parent"] = ops
+            operations["_fk_from_previous"] = ops
 
         operations[mapper.table_name] = mapper._map_data_to_columns(entity)
         return operations
@@ -118,6 +109,7 @@ class ClassTableInheritance(InheritanceStrategy):
     def resolve_delete(self, mapper, entity):
         operations = {}
 
+        operations[mapper.table_name] = {}
         operations[mapper.table_name]["_pk"] = {mapper.pk: getattr(entity, mapper.pk)}
         
         if mapper.parent:
