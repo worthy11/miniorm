@@ -129,6 +129,15 @@ class SchemaGenerator:
             
             if not col.nullable:
                 constraints.append("NOT NULL")
+
+            if col.unique and name != mapper.pk:
+                constraints.append("UNIQUE")
+
+            if col.default is not None:
+                default_val = col.default
+                if isinstance(default_val, str):
+                    default_val = f"'{default_val}'"
+                constraints.append(f"DEFAULT {default_val}")
             column_defs.append(f"{q_name} {sql_type} {' '.join(constraints)}".strip())
 
         for name, col in columns_to_include.items():
