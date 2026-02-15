@@ -33,6 +33,15 @@ class QueryBuilder:
                 target_table = self._quote(target_mapper.table_name)
                 remote_pk = self._quote(target_mapper.pk)
                 local_pk = self._quote(mapper.pk)
+
+                selects = target_mapper.prepare_select()
+                for table_name, columns in selects.items():
+                    if "_join" in columns:
+                        join_table, join_on_local, join_on_remote = columns["_join"]
+                        all_joins.append(f'JOIN {join_table} ON {table_name}.{self._quote(join_on_local)} = {join_table}.{self._quote(join_on_remote)}')
+                        columns.pop("_join")
+                cols.update({col: table_name for col in columns})
+
                 if rel.r_type == "many-to-one":
                     local_fk = self._quote(rel._resolved_fk_name)
                     all_joins.append(f'JOIN {target_table} ON {table}.{local_fk} = {target_table}.{remote_pk}')

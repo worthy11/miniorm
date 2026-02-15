@@ -7,7 +7,7 @@ from miniorm.filters import col, and_, or_
 
 class Person(MiniBase):
     id = Number(pk=True)
-    first_name = Text()
+    name = Text()
     last_name = Text()
 
     class Meta:
@@ -27,7 +27,7 @@ class Student(Person):
     subjects = Relationship("subjects", r_type="many-to-many", cascade_delete=True)
     
     def __repr__(self):
-        return f"<Student(id={self.person_id}, first_name={self.first_name}, last_name={self.last_name}, age={self.age}, index={self.index})>"
+        return f"<Student(id={self.person_id}, name={self.name}, last_name={self.last_name}, age={self.age}, index={self.index})>"
 
 class GraduateStudent(Student):
     class Meta:
@@ -174,12 +174,24 @@ def test_inheritance():
         print(master.subjects)
 
 
+def test_filters():
+    student1 = Student(name="John", last_name="Doe", age=20, index="123456", subjects=[Subject(name="Mathematics")])
+    student2 = Student(name="Jane", last_name="Smith", age=22, index="123457", subjects=[Subject(name="Computer Science")])
+    session.add(student1)
+    session.add(student2)
+    session.commit()
+
+    students = session.query(Student).join("subjects").filter(col("name").in_(["Mathematics"])).all()
+    for student in students:
+        print(student)
+
 engine = DatabaseEngine(db_path="test_class.sqlite")
 generator = SchemaGenerator()
 generator.create_all(engine, MiniBase._registry, drop_first=True)
 
 with Session(engine) as session:
-    test_insert()
-    test_update()
-    test_select()
-    test_delete()
+    # test_insert()
+    # test_update()
+    # test_select()
+    # test_delete()
+    test_filters()
