@@ -2,6 +2,20 @@ from miniorm.mapper import Mapper
 from miniorm.orm_types import Column, Relationship
 from miniorm.states import ObjectState
 
+
+class ColumnDescriptor:
+    """Descriptor so that Model.column_name returns a ColumnFilter for class-level access (filter syntax)."""
+    def __init__(self, column, name):
+        self.column = column
+        self.name = name
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            from miniorm.filters import ColumnFilter
+            return ColumnFilter(self.name, owner)
+        return instance.__dict__.get(self.name)
+
+
 class MiniBase:
     _registry = {}
 
@@ -44,6 +58,9 @@ class MiniBase:
         
         cls._mapper = Mapper(cls, columns, relationships, meta_attrs)
         MiniBase._registry[cls] = cls._mapper
+
+        for name in columns:
+            setattr(cls, name, ColumnDescriptor(columns[name], name))
 
     def __getattribute__(self, name):
         if name.startswith('_') or name in ('mapper_args', 'Meta'):

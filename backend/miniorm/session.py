@@ -61,18 +61,23 @@ class Session:
                             self.add(item)
             self.unit_of_work.append(InsertTransaction(self, entity))
 
-    def update(self, entity):
+    def update(self, entity, _seen=None):
+        if _seen is None:
+            _seen = set()
+        if id(entity) in _seen:
+            return
         state = getattr(entity, '_orm_state', None)
         if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
             if not any(t.entity is entity and isinstance(t, UpdateTransaction) for t in self.unit_of_work):
+                _seen.add(id(entity))
                 for attr in entity.__dict__:
                     value = getattr(entity, attr)
                     if hasattr(value, '_mapper'):
-                        self.update(value)
+                        self.update(value, _seen=_seen)
                     if isinstance(value, list):
                         for item in value:
                             if hasattr(item, '_mapper'):
-                                self.update(item)
+                                self.update(item, _seen=_seen)
                 self.unit_of_work.append(UpdateTransaction(self, entity))
 
     def delete(self, entity):
@@ -80,9 +85,8 @@ class Session:
         if state == ObjectState.PENDING:
             for t in self.unit_of_work:
                 if t.entity is entity and isinstance(t, InsertTransaction):
-                    self.unit_of_work.remove(found_insert)
+                    self.unit_of_work.remove(t)
                     object.__setattr__(entity, '_orm_state', ObjectState.TRANSIENT)
-                    print(f"DEBUG: Cancelled adding object {entity}. Removed from queue.")
                     return
             
         if state in (ObjectState.PERSISTENT, ObjectState.EXPIRED):
@@ -103,9 +107,7 @@ class Session:
 
         dirty_objects = self._get_dirty_objects()
         for obj in dirty_objects:
-            is_queued = any(t.entity is obj and isinstance(t, UpdateTransaction) for t in self.unit_of_work)
-            if not is_queued:
-                self.unit_of_work.append(UpdateTransaction(self, obj))
+            self.update(obj)
 
         if not self.unit_of_work:
             self._in_flush = False
@@ -163,10 +165,24 @@ class Session:
                 if state == ObjectState.DELETED:
                     continue
                 self._flush_m2m(entity)
+                self._make_persistent(entity)
 
             for entity in entities_to_sync:
                 if getattr(entity, '_orm_state', None) != ObjectState.DELETED:
                     self._take_snapshot(entity)
+
+            deleted_entities = [
+                obj for (_, _), obj in list(self.identity_map._map.items())
+                if getattr(obj, '_orm_state', None) == ObjectState.DELETED
+            ]
+            for deleted in deleted_entities:
+                self._remove_deleted_from_m2m_collections(deleted)
+            for (model_class, pk_val), obj in list(self.identity_map._map.items()):
+                if getattr(obj, '_orm_state', None) == ObjectState.DELETED:
+                    self.identity_map.remove(model_class, pk_val)
+                    self._snapshots.pop(id(obj), None)
+                    object.__setattr__(obj, '_session', None)
+                    object.__setattr__(obj, '_orm_state', ObjectState.DETACHED)
 
             self._processed_transactions = []
 
@@ -253,28 +269,36 @@ class Session:
     def _flush_m2m(self, instance):
         mapper = instance._mapper
         for name, rel in mapper.relationships.items():
-            if rel.r_type != "many-to-many": continue
-            
+            if rel.r_type != "many-to-many":
+                continue
+
             assoc = rel.association_table
-            current_objects = getattr(instance, name, [])
-            
+            # Use __dict__ so we never trigger lazy load during flush (DB may not have assoc rows yet)
+            current_val = instance.__dict__.get(name)
+            current_objects = current_val if isinstance(current_val, list) else []
             for obj in current_objects:
                 if getattr(obj, '_orm_state', None) == ObjectState.TRANSIENT:
                     self.add(obj)
 
             def safe_int(val):
-                if val is None or isinstance(val, Column): return None
-                try: return int(val)
-                except: return str(val)
+                if val is None or isinstance(val, Column):
+                    return None
+                try:
+                    return int(val)
+                except Exception:
+                    return str(val)
 
-            current_ids = {safe_int(getattr(o, o._mapper.pk)) for o in current_objects 
-                           if hasattr(o, '_mapper') and safe_int(getattr(o, o._mapper.pk)) is not None}
-            
+            current_ids = {
+                safe_int(getattr(o, o._mapper.pk))
+                for o in current_objects
+                if hasattr(o, '_mapper') and safe_int(getattr(o, o._mapper.pk)) is not None
+            }
             old_snapshot = self._snapshots.get(id(instance), {})
             old_ids = {safe_int(x) for x in old_snapshot.get(name, [])}
 
             local_id = safe_int(getattr(instance, mapper.pk))
-            if local_id is None: continue
+            if local_id is None:
+                continue
 
             to_add = current_ids - old_ids
             to_remove = old_ids - current_ids
@@ -283,21 +307,50 @@ class Session:
                 sql, params = self.query_builder.build_m2m_insert(
                     assoc.name, local_id, target_id, assoc.local_key, assoc.remote_key
                 )
-                try: self.engine.execute(sql, params)
-                except: pass 
+                self.engine.execute(sql, params)
 
             for target_id in to_remove:
-                print(f"DEBUG: Removing M2M relationship {name} from {instance} to {target_id}")
                 sql, params = self.query_builder.build_m2m_delete(
                     assoc.name, local_id, target_id, assoc.local_key, assoc.remote_key
                 )
                 self.engine.execute(sql, params)
 
+    def _remove_deleted_from_m2m_collections(self, deleted_entity):
+        """Remove a deleted entity from any in-memory M2M collections so cached objects stay consistent."""
+        if not getattr(deleted_entity, '_mapper', None):
+            return
+        deleted_cls = deleted_entity.__class__
+        deleted_pk = getattr(deleted_entity, deleted_entity._mapper.pk, None)
+        for (_, _), obj in list(self.identity_map._map.items()):
+            if obj is deleted_entity or getattr(obj, '_orm_state', None) == ObjectState.DELETED:
+                continue
+            if not getattr(obj, '_mapper', None):
+                continue
+            for name, rel in obj._mapper.relationships.items():
+                if rel.r_type != "many-to-many":
+                    continue
+                coll = obj.__dict__.get(name)
+                if not isinstance(coll, list):
+                    continue
+                removed = False
+                for i in range(len(coll) - 1, -1, -1):
+                    x = coll[i]
+                    if x is deleted_entity:
+                        coll.pop(i)
+                        removed = True
+                    elif hasattr(x, '_mapper') and x.__class__ == deleted_cls:
+                        x_pk = getattr(x, x._mapper.pk, None)
+                        if x_pk is not None and x_pk == deleted_pk:
+                            coll.pop(i)
+                            removed = True
+                if removed:
+                    self._take_snapshot(obj)
+
     def _take_snapshot(self, instance):
         if not instance._mapper: return
 
         state = {}
-        for col in instance._mapper.columns:
+        for col in instance._mapper.get_tracked_column_names():
             if col in instance.__dict__:
                 state[col] = instance.__dict__[col]
 
@@ -375,7 +428,7 @@ class Session:
             if old_state is None: continue
             
             is_dirty = False
-            for col in obj._mapper.columns:
+            for col in obj._mapper.get_tracked_column_names():
                 if col == obj._mapper.pk: continue
                 if obj.__dict__.get(col) != old_state.get(col):
                     is_dirty = True; break

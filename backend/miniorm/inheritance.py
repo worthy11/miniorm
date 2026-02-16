@@ -1,4 +1,4 @@
-from miniorm.orm_types import Text
+from miniorm.orm_types import Text, Relationship
 
 class InheritanceStrategy():
     name: str
@@ -7,6 +7,9 @@ class InheritanceStrategy():
         pass
 
     def resolve_table_name(self, mapper):
+        pass
+    
+    def resolve_relationships(self, mapper):
         pass
     
     def resolve_select(self, mapper):
@@ -37,9 +40,14 @@ class SingleTableInheritance(InheritanceStrategy):
 
     def resolve_columns(self, mapper):
         if mapper.parent:
-            mapper.columns = dict(mapper.parent.columns) | mapper.columns
+            for name, col in mapper.parent.columns.items():
+                if name not in mapper.columns and not col.pk:
+                    mapper.columns[name] = col
 
     def resolve_table_name(self, mapper):
+        pass
+
+    def resolve_relationships(self, mapper):
         pass
 
     def resolve_select(self, mapper):
@@ -75,6 +83,12 @@ class ClassTableInheritance(InheritanceStrategy):
 
     def resolve_table_name(self, mapper):
         pass
+
+    def resolve_relationships(self, mapper):
+        if mapper.parent:
+            parent_rel = Relationship(mapper.parent.table_name, r_type="one-to-one")
+            parent_rel._resolved_target = mapper.parent.cls
+            mapper.declared_relationships[mapper.pk] = parent_rel
 
     def resolve_select(self, mapper):
         columns = {}

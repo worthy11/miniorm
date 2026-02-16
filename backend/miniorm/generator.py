@@ -1,5 +1,4 @@
 import re
-from miniorm.orm_types import ForeignKey
 
 class SchemaGenerator:
     TYPE_MAP = {str: "TEXT", int: "INTEGER", bool: "INTEGER"}
@@ -103,14 +102,7 @@ class SchemaGenerator:
         quoted_table = self._quote(table_name)
         column_defs = []
         mapper = info['mapper']
-        if mapper.inheritance.strategy.name == "CLASS":
-            parent_cols = set(mapper.parent.columns.keys()) if mapper.parent else set()
-            columns_to_include = {
-                name: col for name, col in mapper.columns.items() 
-                if name not in parent_cols or name == mapper.pk
-            }
-        else:
-            columns_to_include = info['columns']
+        columns_to_include = info['columns']
 
         for name, col in columns_to_include.items():
             q_name = self._quote(name)
@@ -137,10 +129,10 @@ class SchemaGenerator:
             column_defs.append(f"{q_name} {sql_type} {' '.join(constraints)}".strip())
 
         for name, col in columns_to_include.items():
-            if hasattr(col, 'target_table'):
+            if col.foreign_key:
                 ref_sql = (f"FOREIGN KEY({self._quote(name)}) REFERENCES "
-                           f"{self._quote(col.target_table)}({self._quote(col.target_column)})")
-                if getattr(col, 'on_delete_cascade', False):
+                           f"{self._quote(col.foreign_key.target_table)}({self._quote(col.foreign_key.target_column)})")
+                if col.foreign_key.on_delete_cascade:
                     ref_sql += " ON DELETE CASCADE"
                 column_defs.append(ref_sql)
 

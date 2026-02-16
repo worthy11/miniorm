@@ -18,56 +18,96 @@ class QueryBuilder:
 
         selects = mapper.prepare_select()
         cols = {}
-        for table_name, columns in selects.items():
+        model_col_to_table = {}  # (model_class, column_name) -> table_ref for filter resolution
+        select_list = []
+        tables_used = set()
+        for tbl, columns in selects.items():
             if "_join" in columns:
                 join_table, join_on_local, join_on_remote = columns["_join"]
-                all_joins.append(f'JOIN {join_table} ON {table_name}.{self._quote(join_on_local)} = {join_table}.{self._quote(join_on_remote)}')
+                all_joins.append(f'JOIN {join_table} ON {tbl}.{self._quote(join_on_local)} = {join_table}.{self._quote(join_on_remote)}')
                 columns.pop("_join")
+            tables_used.add(tbl)
+            for col in columns:
+                if col not in cols:
+                    cols[col] = tbl
+                model_col_to_table[(mapper.cls, col)] = tbl
+                select_list.append((tbl, col))
 
-            cols.update({col: table_name for col in columns})
-
-        # Ensure filter columns exist in cols (e.g. FK columns from relationships)
         if joins:
+            left_mapper = mapper
+            left_table = self._quote(left_mapper.table_name)
             for i, rel in enumerate(joins):
+                if not getattr(rel, "_resolved_target", None):
+                    continue
                 target_mapper = rel._resolved_target._mapper
-                target_table = self._quote(target_mapper.table_name)
                 remote_pk = self._quote(target_mapper.pk)
-                local_pk = self._quote(mapper.pk)
+                local_pk = self._quote(left_mapper.pk)
 
-                selects = target_mapper.prepare_select()
-                for table_name, columns in selects.items():
-                    if "_join" in columns:
-                        join_table, join_on_local, join_on_remote = columns["_join"]
-                        all_joins.append(f'JOIN {join_table} ON {table_name}.{self._quote(join_on_local)} = {join_table}.{self._quote(join_on_remote)}')
-                        columns.pop("_join")
-                cols.update({col: table_name for col in columns})
-
+                # 1) Add relationship join first (so target table is in the query before inheritance joins)
                 if rel.r_type == "many-to-one":
                     local_fk = self._quote(rel._resolved_fk_name)
-                    all_joins.append(f'JOIN {target_table} ON {table}.{local_fk} = {target_table}.{remote_pk}')
+                    target_table = self._quote(target_mapper.table_name)
+                    all_joins.append(f'JOIN {target_table} ON {left_table}.{local_fk} = {target_table}.{remote_pk}')
                 elif rel.r_type == "one-to-many":
                     remote_fk = self._quote(rel._resolved_fk_name)
-                    all_joins.append(f'JOIN {target_table} ON {table}.{local_pk} = {target_table}.{remote_fk}')
-
+                    target_table = self._quote(target_mapper.table_name)
+                    all_joins.append(f'JOIN {target_table} ON {left_table}.{local_pk} = {target_table}.{remote_fk}')
                 elif rel.r_type == "many-to-many" and rel.association_table:
                     assoc = rel.association_table
                     assoc_table = self._quote(assoc.name)
                     a_alias = self._quote(f"assoc_{i}")
-                    
+                    target_table = self._quote(target_mapper.table_name)
                     all_joins.append(
-                        f'JOIN {assoc_table} AS {a_alias} ON {table}.{local_pk} = {a_alias}.{self._quote(assoc.local_key)}'
+                        f'JOIN {assoc_table} AS {a_alias} ON {left_table}.{local_pk} = {a_alias}.{self._quote(assoc.local_key)}'
                     )
                     all_joins.append(
                         f'JOIN {target_table} ON {a_alias}.{self._quote(assoc.remote_key)} = {target_table}.{remote_pk}'
                     )
 
-        sql = f"SELECT {', '.join([f'{table_name}.{self._quote(col)}' for col, table_name in cols.items()])} FROM {table}"
+                # 2) Then add target's inheritance joins and columns (alias parent table if already in query)
+                selects = target_mapper.prepare_select()
+                table_alias = {}  # join_table -> alias when we alias a duplicate table
+                for tbl, columns in selects.items():
+                    cols_copy = dict(columns)
+                    if "_join" in cols_copy:
+                        join_table, join_on_local, join_on_remote = cols_copy.pop("_join")
+                        if join_table in tables_used:
+                            alias = f"{join_table}_{i}"
+                            table_alias[join_table] = alias
+                            tables_used.add(alias)
+                            all_joins.append(
+                                f'JOIN {join_table} AS {self._quote(alias)} ON {self._quote(tbl)}.{self._quote(join_on_local)} = {self._quote(alias)}.{self._quote(join_on_remote)}'
+                            )
+                        else:
+                            tables_used.add(join_table)
+                            all_joins.append(
+                                f'JOIN {self._quote(join_table)} ON {self._quote(tbl)}.{self._quote(join_on_local)} = {self._quote(join_table)}.{self._quote(join_on_remote)}'
+                            )
+                    tbl_ref = table_alias.get(tbl, tbl)
+                    if tbl_ref not in tables_used and tbl_ref == tbl:
+                        tables_used.add(tbl)
+                    for col in cols_copy:
+                        if col not in cols:
+                            cols[col] = tbl_ref
+                        model_col_to_table[(rel._resolved_target, col)] = tbl_ref
+                        select_list.append((tbl_ref, col))
+
+                left_mapper = target_mapper
+                left_table = self._quote(left_mapper.table_name)
+
+        if joins and select_list:
+            select_clause = ', '.join(
+                f'{self._quote(t)}.{self._quote(c)} AS {self._quote(t + "#" + c)}'
+                for t, c in select_list
+            )
+        else:
+            select_clause = ', '.join([f'{t}.{self._quote(c)}' for t, c in select_list])
+        sql = f"SELECT {select_clause} FROM {table}"
         if 'all_joins' in locals() and all_joins:
             sql += " " + " ".join(all_joins)
 
         where_parts = []
         
-        # Process simple equality filters
         actual_filters = dict(filters)
         if actual_filters:
             main_table = mapper.table_name
@@ -81,10 +121,9 @@ class QueryBuilder:
                     where_parts.append(f"{prefixed_col} = ?")
                     params.append(val)
         
-        # Process complex filter expressions
         if filter_expressions:
             for expr in filter_expressions:
-                sql_part, expr_params = self._build_filter_expression(expr, cols, table)
+                sql_part, expr_params = self._build_filter_expression(expr, cols, table, model_col_to_table)
                 where_parts.append(sql_part)
                 params.extend(expr_params)
         
@@ -93,10 +132,22 @@ class QueryBuilder:
 
         if order_by:
             order_clauses = []
-            for col, direction in order_by:
-                table_name = cols[col]
-                prefixed_col = f"{table_name}.{self._quote(col)}"
+            for item in order_by:
+                if hasattr(item, 'column_name'):
+                    column = item.column_name
+                    direction = item.direction
+                    
+                    if item.model_class:
+                        table_name = item.model_class._mapper.table_name
+                    else:
+                        table_name = cols.get(column, mapper.table_name)
+                else:
+                    column, direction = item
+                    table_name = cols.get(column, mapper.table_name)
+
+                prefixed_col = f"{table_name}.{self._quote(column)}"
                 order_clauses.append(f"{prefixed_col} {direction}")
+            
             sql += " ORDER BY " + ", ".join(order_clauses)
         
         if limit is not None:
@@ -105,85 +156,83 @@ class QueryBuilder:
         elif offset is not None:
             sql += f" LIMIT -1 OFFSET {int(offset)}"
 
-        # print(f"DEBUG: SELECT: {sql}")
-
         return sql, tuple(params)
     
-    def _build_filter_expression(self, expr, cols, table):
+    def _resolve_filter_table(self, expr, cols, table, model_col_to_table):
+        """Resolve table (or alias) for a filter expression column; use model_class when present."""
+        default_table = table.strip('"') if isinstance(table, str) else table
+        if model_col_to_table and getattr(expr, 'model_class', None) is not None:
+            t = model_col_to_table.get((expr.model_class, expr.column_name))
+            if t is not None:
+                return t
+        return cols.get(expr.column_name, default_table)
+
+    def _build_filter_expression(self, expr, cols, table, model_col_to_table=None):
         """Convert a filter expression into SQL and parameters"""
         from miniorm.filters import (
             ComparisonFilter, InFilter, NotInFilter, LikeFilter, ILikeFilter,
             IsNullFilter, IsNotNullFilter, BetweenFilter, CombinedFilter, ColumnFilter, NotFilter
         )
-        
+        if model_col_to_table is None:
+            model_col_to_table = {}
         params = []
-        
+        default_table = table.strip('"') if isinstance(table, str) else table
+
         if isinstance(expr, ComparisonFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
-            
             if expr.is_field_comparison:
-                # Field-to-field comparison
                 other_col = expr.value.column_name
-                other_table_name = cols.get(other_col, table.strip('"'))
+                other_model = getattr(expr.value, 'model_class', None)
+                if model_col_to_table and other_model is not None:
+                    other_table_name = model_col_to_table.get((other_model, other_col), cols.get(other_col, default_table))
+                else:
+                    other_table_name = cols.get(other_col, default_table)
                 prefixed_other_col = f"{other_table_name}.{self._quote(other_col)}"
                 return f"{prefixed_col} {expr.operator} {prefixed_other_col}", params
             else:
-                # Value comparison
                 return f"{prefixed_col} {expr.operator} ?", [expr.value]
-        
         elif isinstance(expr, InFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
             placeholders = ", ".join(["?" for _ in expr.values])
             return f"{prefixed_col} IN ({placeholders})", list(expr.values)
-        
         elif isinstance(expr, NotInFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
             placeholders = ", ".join(["?" for _ in expr.values])
             return f"{prefixed_col} NOT IN ({placeholders})", list(expr.values)
-        
         elif isinstance(expr, LikeFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
             return f"{prefixed_col} LIKE ?", [expr.pattern]
-        
         elif isinstance(expr, ILikeFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
-            # SQLite doesn't have ILIKE, so we use LIKE with LOWER
             return f"LOWER({prefixed_col}) LIKE LOWER(?)", [expr.pattern]
-        
         elif isinstance(expr, IsNullFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
             return f"{prefixed_col} IS NULL", []
-        
         elif isinstance(expr, IsNotNullFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
             return f"{prefixed_col} IS NOT NULL", []
-        
         elif isinstance(expr, BetweenFilter):
-            table_name = cols.get(expr.column_name, table.strip('"'))
+            table_name = self._resolve_filter_table(expr, cols, table, model_col_to_table)
             prefixed_col = f"{table_name}.{self._quote(expr.column_name)}"
             return f"{prefixed_col} BETWEEN ? AND ?", [expr.lower, expr.upper]
-        
         elif isinstance(expr, CombinedFilter):
             parts = []
             all_params = []
             for sub_expr in expr.filters:
-                sql_part, expr_params = self._build_filter_expression(sub_expr, cols, table)
+                sql_part, expr_params = self._build_filter_expression(sub_expr, cols, table, model_col_to_table)
                 parts.append(f"({sql_part})")
                 all_params.extend(expr_params)
             return f" {expr.logic} ".join(parts), all_params
-        
         elif isinstance(expr, NotFilter):
-            # Negate a filter expression
-            sql_part, expr_params = self._build_filter_expression(expr.filter_expr, cols, table)
+            sql_part, expr_params = self._build_filter_expression(expr.filter_expr, cols, table, model_col_to_table)
             return f"NOT ({sql_part})", expr_params
-        
         else:
             raise TypeError(f"Unknown filter expression type: {type(expr)}")
 

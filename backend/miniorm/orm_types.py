@@ -11,10 +11,9 @@ class AssociationTable:
 
 
 class Relationship:
-    def __init__(self, target, r_type="many-to-one", pk=False, backref=None, cascade_delete=True):
+    def __init__(self, target, r_type="many-to-one", backref=None, cascade_delete=True):
         self.target_table = target
         self.r_type = r_type
-        self.pk = pk
         self.backref = backref
         self.cascade_delete = cascade_delete
         self.local_table = None
@@ -35,12 +34,13 @@ class Relationship:
         return f"<Relationship {', '.join(parts)}>"
 
 class Column:
-    def __init__(self, dtype, pk=False, nullable=True, unique=False, default=None):
+    def __init__(self, dtype, pk=False, nullable=True, unique=False, default=None, foreign_key=None):
         self.dtype = dtype
         self.pk = pk
         self.nullable = nullable
         self.unique = unique
         self.default = default
+        self.foreign_key = foreign_key
 
     def __eq__(self, other):
         return FilterExpr(self, '=', other)
@@ -103,8 +103,8 @@ class Number(Column):
         super().__init__(int, pk, nullable, unique, default)
 
 class ForeignKey(Column):
-    def __init__(self, target_table, target_column, pk=False, nullable=True, unique=True, on_delete_cascade=True):
-        super().__init__(int, pk=pk, nullable=nullable, unique=unique)
+    def __init__(self, target_table, target_column, nullable=True, unique=True, on_delete_cascade=True):
+        super().__init__(int, nullable=nullable, unique=unique)
         self.target_table = target_table
         self.target_column = target_column
         self.on_delete_cascade = on_delete_cascade

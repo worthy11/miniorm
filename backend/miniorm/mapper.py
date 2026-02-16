@@ -20,8 +20,8 @@ class Mapper:
         self._resolve_inheritance()
         self._resolve_table_name()
         self._resolve_columns()
-        self._resolve_relationships()
         self._resolve_pk()
+        self._resolve_relationships()
 
     def __repr__(self):
         cols = ", ".join(self.columns.keys())
@@ -47,28 +47,30 @@ class Mapper:
                 parent_strategy = self.parent.inheritance.strategy.name
                 if parent_strategy != requested:
                     raise ValueError(f"Inheritance strategy mismatch in class {self.cls.__name__} and {self.parent.cls.__name__}: {parent_strategy} != {requested}")
-        else:
-            requested = "SINGLE"
 
-        if requested not in STRATEGIES:
-            raise ValueError(f"Unknown inheritance strategy: {requested}")
+            if requested not in STRATEGIES:
+                raise ValueError(f"Unknown inheritance strategy: {requested}")
 
-        if self.parent:
-            self.parent.children.append(self.cls)
+            if self.parent:
+                self.parent.children.append(self.cls)
 
-        strategy = STRATEGIES[requested]
-        self.inheritance = Inheritance(strategy)
+            strategy = STRATEGIES[requested]
+            self.inheritance = Inheritance(strategy)
     
     def _resolve_table_name(self):
         self.table_name = self.meta.get("table_name", self.cls.__name__+"s")
-        self.inheritance.strategy.resolve_table_name(self)
+        if self.inheritance:
+            self.inheritance.strategy.resolve_table_name(self)
         if "#" in self.table_name:
             raise ValueError("Table name cannot contain '#'")
 
     def _resolve_columns(self):
-        self.inheritance.strategy.resolve_columns(self)
+        if self.inheritance:
+            self.inheritance.strategy.resolve_columns(self)
         
     def _resolve_relationships(self):
+        if self.inheritance:
+            self.inheritance.strategy.resolve_relationships(self)
         for name, rel in self.declared_relationships.items():
             target_cls = self._resolve_target_class(rel.target_table)
             if target_cls is None:
@@ -145,9 +147,9 @@ class Mapper:
             rel.local_table = self.table_name
             rel.remote_table = target_mapper.table_name
             
-            fk = ForeignKey(target_mapper.table_name, target_mapper.pk, pk=rel.pk, unique=rel.r_type == "one-to-one",
+            fk = ForeignKey(target_mapper.table_name, target_mapper.pk, unique=rel.r_type == "one-to-one",
                             on_delete_cascade=getattr(rel, 'cascade_delete', True))
-            self.columns[name] = fk
+            self.columns[name].foreign_key = fk
             
             backref_name = rel.backref
             if backref_name in target_mapper.relationships:
@@ -172,12 +174,14 @@ class Mapper:
             if isinstance(val, list):
                 val = None
 
-            if val is not None:
-                mapped_data[col_name] = val
-            elif col_obj.default is not None:
-                mapped_data[col_name] = col_obj.default
-            else:
-                mapped_data[col_name] = None
+                if val is not None:
+                    mapped_data[attr] = val
+                elif self.columns[attr].default is not None:
+                    mapped_data[attr] = self.columns[attr].default
+                elif self.columns[attr].foreign_key:
+                    mapped_data[attr] = None
+                else:
+                    mapped_data[attr] = None
 
         return mapped_data
 
@@ -215,9 +219,6 @@ class Mapper:
                 raise ValueError(f"Cannot resolve relationship target(s) after all models loaded: {mapper.cls.__name__} pending: {pending}")
 
         for mapper in MiniBase._registry.values():
-            mapper._resolve_pk()
-        
-        for mapper in MiniBase._registry.values():
             if mapper.inheritance and mapper.inheritance.strategy.name == "CLASS":
                 if mapper.parent and not any(
                     getattr(rel, "_resolved_target", None) and getattr(rel._resolved_target, "_mapper", None) and rel._resolved_target._mapper.table_name == mapper.parent.table_name
@@ -225,14 +226,31 @@ class Mapper:
                 ):
                     raise ValueError(f"Missing relationship to parent ({mapper.parent.table_name}) in {mapper.table_name} (CLASS inheritance requires it)")
                     
+    def get_tracked_column_names(self):
+        """Column attribute names to use for snapshot/dirty checking (includes inherited)."""
+        if self.inheritance:
+            return list(self.inheritance.strategy.resolve_attributes(self).keys())
+        return list(self.columns.keys())
+
     def prepare_select(self):
-        return self.inheritance.strategy.resolve_select(self)
+        if self.inheritance:
+            return self.inheritance.strategy.resolve_select(self)
+        else:
+            return {self.table_name: self.columns}
 
     def prepare_insert(self, entity):
-        return self.inheritance.strategy.resolve_insert(self, entity)
+        if self.inheritance:
+            return self.inheritance.strategy.resolve_insert(self, entity)
+        else:
+            return {self.table_name: self._map_data_to_columns(entity)}
     
     def prepare_update(self, entity, old_state):
-        return self.inheritance.strategy.resolve_update(self, entity)
+        if self.inheritance:
+            return self.inheritance.strategy.resolve_update(self, entity)
+        else:
+            operations = {self.table_name: self._map_data_to_columns(entity)}
+            operations[self.table_name]["_pk"] = {self.pk: getattr(entity, self.pk)}
+            return operations
     
     def prepare_delete(self, entity, _visited=None):
         table_name = self.table_name
@@ -256,29 +274,38 @@ class Mapper:
 
         for rel in all_relationships.values():
             if getattr(rel, 'cascade_delete', True):
-                if rel.r_type == 'many-to-many':
-                    assoc = rel.association_table
-                    key = None
-                    if assoc.local_table in all_my_tables:
-                        key = assoc.local_key
-                    elif assoc.remote_table in all_my_tables:
-                        key = assoc.remote_key
-                    
-                    if key:
-                        dependents[assoc.name] = {key: getattr(entity, self.pk)}
+                if rel.r_type in ['one-to-one', 'many-to-one'] and rel.remote_table == table_name:
+                    fk_name = rel._resolved_fk_name
+                    fk_value = getattr(entity, entity._mapper.pk)
+                    target_cls = rel._resolved_target
 
-                elif rel.r_type in ['one-to-one', 'many-to-one'] and rel.remote_table in all_my_tables:
-
-                    pass
-
-        inheritance_deletes = self.inheritance.strategy.resolve_delete(self, entity)
+                    target_mapper = target_cls._mapper
+                    dependents[target_mapper.table_name] = {fk_name: fk_value}
+                    target_mapper.prepare_delete(entity, _visited)
+                
+                elif rel.r_type == 'many-to-many':
+                    association_table = rel.association_table
+                    name = association_table.name
+                    if association_table.local_table == table_name:
+                        key = association_table.local_key
+                    else:
+                        key = association_table.remote_key
+                    dependents[name] = {key: getattr(entity, entity._mapper.pk)}
         
-        final_ops = {**dependents, **inheritance_deletes}
-        return final_ops
+        deletes = dependents.get(table_name, {})
+        deletes[self.pk] = getattr(entity, self.pk)
+        dependents[table_name] = deletes
+        if self.inheritance:
+            dependents.update(self.inheritance.strategy.resolve_delete(self, entity))
+        return dependents
     
     def hydrate(self, row_dict):
-        target_cls = self.inheritance.strategy.resolve_target_class(self, row_dict)
-        attributes = self.inheritance.strategy.resolve_attributes(self)
+        if self.inheritance:
+            target_cls = self.inheritance.strategy.resolve_target_class(self, row_dict)
+            attributes = self.inheritance.strategy.resolve_attributes(self)
+        else:
+            target_cls = self.cls
+            attributes = self.columns
         obj = target_cls()
         target_mapper = target_cls._mapper
 
