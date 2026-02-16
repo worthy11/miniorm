@@ -162,24 +162,22 @@ class Mapper:
 
     def _map_data_to_columns(self, entity):
         mapped_data = {}
+        for col_name, col_obj in self.columns.items():
+            val = entity.__dict__.get(col_name)
 
-        for attr in entity.__dict__:
-            if attr in self.columns:
-                val = getattr(entity, attr, None)
-                if hasattr(val, '_mapper'):
-                    target_pk = val._mapper.pk
-                    val = getattr(val, target_pk, None)
-                    if val is not None:
-                        object.__setattr__(entity, attr, val)
-                if isinstance(val, list):
-                    val = None
+            if hasattr(val, '_mapper'):
+                pk_attr = val._mapper.pk
+                val = val.__dict__.get(pk_attr)
+            
+            if isinstance(val, list):
+                val = None
 
-                if val is not None:
-                    mapped_data[attr] = val
-                elif self.columns[attr].default is not None:
-                    mapped_data[attr] = self.columns[attr].default
-                else:
-                    mapped_data[attr] = None
+            if val is not None:
+                mapped_data[col_name] = val
+            elif col_obj.default is not None:
+                mapped_data[col_name] = col_obj.default
+            else:
+                mapped_data[col_name] = None
 
         return mapped_data
 
@@ -238,38 +236,45 @@ class Mapper:
     
     def prepare_delete(self, entity, _visited=None):
         table_name = self.table_name
-        if _visited is None:
-            _visited = set()
-        if table_name in _visited:
-            return {}
+        if _visited is None: _visited = set()
+        if table_name in _visited: return {}
         _visited.add(table_name)
 
         dependents = {}
-        for rel in self.relationships.values():
-            if getattr(rel, 'cascade_delete', True):
-                if rel.r_type in ['one-to-one', 'many-to-one'] and rel.remote_table == table_name:
-                    fk_name = rel._resolved_fk_name
-                    fk_value = getattr(entity, entity._mapper.pk)
-                    target_cls = rel._resolved_target
-
-                    target_mapper = target_cls._mapper
-                    dependents[target_mapper.table_name] = {fk_name: fk_value}
-                    target_mapper.prepare_delete(entity, _visited)
-                
-                elif rel.r_type == 'many-to-many':
-                    association_table = rel.association_table
-                    name = association_table.name
-                    if association_table.local_table == table_name:
-                        key = association_table.local_key
-                    else:
-                        key = association_table.remote_key
-                    dependents[name] = {key: getattr(entity, entity._mapper.pk)}
         
-        deletes = dependents.get(table_name, {})
-        deletes[self.pk] = getattr(entity, self.pk)
-        dependents[table_name] = deletes
-        dependents.update(self.inheritance.strategy.resolve_delete(self, entity))
-        return dependents
+        all_relationships = {}
+        curr = self
+        while curr:
+            all_relationships.update(curr.relationships)
+            curr = curr.parent
+
+        all_my_tables = [self.table_name]
+        curr_p = self.parent
+        while curr_p:
+            all_my_tables.append(curr_p.table_name)
+            curr_p = curr_p.parent
+
+        for rel in all_relationships.values():
+            if getattr(rel, 'cascade_delete', True):
+                if rel.r_type == 'many-to-many':
+                    assoc = rel.association_table
+                    key = None
+                    if assoc.local_table in all_my_tables:
+                        key = assoc.local_key
+                    elif assoc.remote_table in all_my_tables:
+                        key = assoc.remote_key
+                    
+                    if key:
+                        dependents[assoc.name] = {key: getattr(entity, self.pk)}
+
+                elif rel.r_type in ['one-to-one', 'many-to-one'] and rel.remote_table in all_my_tables:
+
+                    pass
+
+        inheritance_deletes = self.inheritance.strategy.resolve_delete(self, entity)
+        
+        final_ops = {**dependents, **inheritance_deletes}
+        return final_ops
     
     def hydrate(self, row_dict):
         target_cls = self.inheritance.strategy.resolve_target_class(self, row_dict)

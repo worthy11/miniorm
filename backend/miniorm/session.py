@@ -49,6 +49,7 @@ class Session:
         if state == ObjectState.TRANSIENT:
             object.__setattr__(entity, '_session', self)
             object.__setattr__(entity, '_orm_state', ObjectState.PENDING)
+            self._take_snapshot(entity)
             
             for attr in entity.__dict__:
                 value = getattr(entity, attr)
@@ -151,6 +152,9 @@ class Session:
                         object.__setattr__(transaction.entity, transaction.entity._mapper.pk, current_id)
                         first_insert_done = True
 
+                    if transaction_type != DeleteTransaction:
+                        self._make_persistent(transaction.entity)
+
                 entities_to_sync.add(transaction.entity)
 
                 
@@ -230,7 +234,7 @@ class Session:
             
             object.__setattr__(instance, '_orm_state', ObjectState.PERSISTENT)
             self._take_snapshot(instance)
-
+                
     def close(self):
         
         all_tracked_objects = list(self.identity_map._map.values())
@@ -329,7 +333,7 @@ class Session:
         
         self.identity_map.add(obj.__class__, pk_val, obj)
         
-        self._take_snapshot(obj)
+        # self._take_snapshot(obj)
         
         return obj
 
@@ -374,16 +378,26 @@ class Session:
             for col in obj._mapper.columns:
                 if col == obj._mapper.pk: continue
                 if obj.__dict__.get(col) != old_state.get(col):
-                    is_dirty = True
-                    break
+                    is_dirty = True; break
             
             if not is_dirty:
                 for name, rel in obj._mapper.relationships.items():
-                    if rel.r_type == "many-to-many":
-                        current_collection = obj.__dict__.get(name)
-                        if isinstance(current_collection, list):
+                    current_val = obj.__dict__.get(name)
+
+                    if rel.r_type in ("many-to-one", "one-to-one"):
+                        if hasattr(current_val, '_mapper'):
+                            current_id = getattr(current_val, current_val._mapper.pk, None)
+                        else:
+                            current_id = current_val
+                        
+                        if current_id != old_state.get(name):
+                            is_dirty = True
+                            break
+                    
+                    elif rel.r_type == "many-to-many":
+                        if isinstance(current_val, list):
                             c_ids = []
-                            for o in current_collection:
+                            for o in current_val:
                                 pk_val = getattr(o, o._mapper.pk, None)
                                 if pk_val is None or isinstance(pk_val, Column):
                                     c_ids.append(f"new_{id(o)}")
@@ -395,8 +409,7 @@ class Session:
                             o_ids = sorted(old_state.get(name, []), key=lambda x: str(x))
                             
                             if c_ids != o_ids:
-                                is_dirty = True
-                                break
+                                is_dirty = True; break
             
             if is_dirty: dirty.append(obj)
         return dirty

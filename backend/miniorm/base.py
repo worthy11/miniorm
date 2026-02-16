@@ -13,6 +13,9 @@ class MiniBase:
         from miniorm.states import ObjectState
         object.__setattr__(self, '_orm_state', ObjectState.TRANSIENT)
         object.__setattr__(self, '_session', None)
+        for name, rel in self._mapper.relationships.items():
+            if rel.r_type in ("one-to-many", "many-to-many"):
+                object.__setattr__(self, name, [])
         self.type = self.__class__.__name__
         for key, value in kwargs.items():
             setattr(self, key, value)
