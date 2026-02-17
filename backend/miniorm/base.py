@@ -80,11 +80,20 @@ class MiniBase:
             rel = mapper.relationships[name]
             current_val = self.__dict__.get(name)
             if isinstance(current_val, list):
+                if rel.r_type == "many-to-one":
+                    if len(current_val) == 1:
+                        current_val = current_val[0]
+                        object.__setattr__(self, name, current_val)
+                    elif len(current_val) > 1:
+                        raise ValueError(f"many-to-one relationship '{name}' cannot have multiple values")
+                    else:
+                        current_val = None
+                        object.__setattr__(self, name, None)
                 is_loaded = True
             elif rel.r_type == "many-to-one":
                 is_loaded = current_val is not None and hasattr(current_val, '_orm_state')
             else:
-                is_loaded = False
+                is_loaded = isinstance(current_val, list)
 
             if not is_loaded:
                 if session:
@@ -194,6 +203,21 @@ class MiniBase:
                         f"Critical error: Cannot change primary key '{name}' "
                         f"for {self.__class__.__name__} after it has been persisted."
                     )
+        
+        if mapper and name in mapper.relationships:
+            rel = mapper.relationships[name]
+            if rel.r_type == "many-to-one" and isinstance(value, list):
+                if len(value) == 1:
+                    value = value[0]
+                elif len(value) > 1:
+                    raise ValueError(f"many-to-one relationship '{name}' cannot have multiple values, got {len(value)} items")
+                else:
+                    value = None
+            session = getattr(self, '_session', None)
+            if session and value is not None and hasattr(value, '_mapper'):
+                state = getattr(value, '_orm_state', None)
+                if state == ObjectState.TRANSIENT:
+                    session.add(value)
 
         object.__setattr__(self, name, value)
 

@@ -11,11 +11,11 @@ class AssociationTable:
 
 
 class Relationship:
-    def __init__(self, target, r_type="many-to-one", backref=None, cascade_delete=True):
+    def __init__(self, target, r_type="many-to-one", backref=None):
         self.target_table = target
         self.r_type = r_type
         self.backref = backref
-        self.cascade_delete = cascade_delete
+        self.cascade_delete = True
         self.local_table = None
         self.remote_table = None
         self._resolved_target = None

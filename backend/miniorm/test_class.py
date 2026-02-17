@@ -14,7 +14,6 @@ def test_single():
         age = Number()
         class Meta:
             table_name = "workers"
-            inheritance = "class"
 
     class Boss(Worker):
         boss_id = Relationship("Worker", r_type="one-to-one", pk=True)
@@ -49,10 +48,9 @@ def test_single():
             table_name = "departaments"
     
     db_path = "test_single_rel.sqlite"
-    if os.path.exists(db_path): os.remove(db_path)
     engine = DatabaseEngine(db_path=db_path)
     generator = SchemaGenerator()
-    generator.create_all(engine, MiniBase._registry)   
+    generator.create_all(engine, MiniBase._registry, drop_first=True)   
     with Session(engine) as session:
         boss = Boss(name="Dyrektor Nowak", age=50, departament="IT")
         boss2 = Boss(name="Dyrektor Nowakowski", age=50, departament="IT")

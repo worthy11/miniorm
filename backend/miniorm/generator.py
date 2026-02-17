@@ -31,16 +31,14 @@ class SchemaGenerator:
 
         return list(table_definitions.keys()), list(m2m_tables)
 
-    def drop_all(self, engine, registry):
-        """Drop all tables (main + m2m). Disables foreign keys for SQLite."""
-        main_tables, m2m_tables = self._collect_tables(registry)
-        all_tables = m2m_tables + main_tables
-
-        if not all_tables:
-            return
-
+    def drop_all(self, engine, registry=None):
+        """Drop all tables currently present in the database. Disables foreign keys for SQLite."""
         engine.execute("PRAGMA foreign_keys = OFF")
         try:
+            # Query sqlite_master to get all user tables (exclude sqlite_* system tables)
+            rows = engine.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            all_tables = [row[0] for row in rows]
+            
             for t_name in all_tables:
                 engine.execute(f"DROP TABLE IF EXISTS {self._quote(t_name)}")
                 print(f"DEBUG: Dropped table: {t_name}")

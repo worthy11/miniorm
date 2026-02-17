@@ -28,8 +28,8 @@ class Teacher(Person):
 class Subject(MiniBase):
     id = Number(pk=True)
     name = Text()
-    particpants = Relationship("Students", r_type="many-to-one", backref="subjects")
-    teachers = Relationship("Teachers", r_type="many-to-one", backref="subjects")
+    participants = Relationship("Students", r_type="many-to-many", backref="subjects")
+    teachers = Relationship("Teachers", r_type="many-to-many", backref="subjects")
 
 
 db_path = "test.sqlite"
@@ -37,43 +37,72 @@ engine = DatabaseEngine(db_path=db_path)
 generator = SchemaGenerator()
 generator.create_all(engine, MiniBase._registry, drop_first=True) 
 with Session(engine) as session:
-    student1 = Student(first_name="Karolina", last_name="Nowak", age=22, index=12345) 
-    student2 = Student(first_name="Maciej", last_name="Jakubowski", age=23, index=12346) 
     subject1 = Subject(name="Mathematics")
     subject2 = Subject(name="Physics")
-    teacher1 = Teacher(first_name="Jan", last_name="Kowalski", salary=5000)
-    teacher2 = Teacher(first_name="Anna", last_name="Sienkiewicz", salary=5000)
+    # teacher1 = Teacher(first_name="Jan", last_name="Kowalski", salary=5000)
+    # teacher2 = Teacher(first_name="Anna", last_name="Sienkiewicz", salary=5000)
     
-    subject1.teachers = [teacher2]
-    subject2.teachers = [teacher1, teacher2]
-    student1.subjects = [subject1, subject2]
-    student2.subjects = [subject1]
-    session.add(student1)
-    session.add(student2)
-    session.commit()
-
-    student1.first_name = "Sylwia"
+    session.add(subject1)
+    session.add(subject2)
     session.commit()
 
     subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
     for subject in subjects:
         print(f"Subject: {subject.name}")
         print(f"Students:")
-        particpants = subject.particpants
-        students = particpants if isinstance(particpants, list) else ([particpants] if particpants else [])
-        for student in students:
-            print(f"  {student.first_name} {student.last_name}")
+        participants = subject.participants
+        for participant in participants:
+            print(f"  {participant.first_name} {participant.last_name}")
     print("--------------------------------")
 
-    students = session.query(Student).join(Subject).join(Teacher).all()
-    for student in students:
-        print(f"Student: {student.first_name} {student.last_name}")
-        print(f"Subjects:")
-        for subject in student.subjects:
-            print(f"  {subject.name}")
-            for teacher in subject.teachers:
-                print(f"    {teacher.first_name} {teacher.last_name}")
+
+
+    student1 = Student(first_name="Karolina", last_name="Nowak", age=22, index=12345) 
+    subject1.participants.append(student1)
+    session.commit()
+    
+    subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    for subject in subjects:
+        print(f"Subject: {subject.name}")
+        print(f"Students:")
+        participants = subject.participants
+        for participant in participants:
+            print(f"  {participant.first_name} {participant.last_name}")
     print("--------------------------------")
+
+    session.delete(student1)
+    session.commit()
+    subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    for subject in subjects:
+        print(f"Subject: {subject.name}")
+        print(f"Students:") 
+        participants = subject.participants
+        for participant in participants:
+            print(f"  {participant.first_name} {participant.last_name}")
+    print("--------------------------------")
+    
+    # student2 = Student(first_name="Maciej", last_name="Jakubowski", age=23, index=12346) 
+    # subject2.participant = student2
+
+    # subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    # for subject in subjects:
+    #     print(f"Subject: {subject.name}")
+    #     print(f"Students:")
+    #     particpants = subject.particpants
+    #     students = particpants if isinstance(particpants, list) else ([particpants] if particpants else [])
+    #     for student in students:
+    #         print(f"  {student.first_name} {student.last_name}")
+    # print("--------------------------------")
+    
+    # students = session.query(Student).join(Subject).join(Teacher).all()
+    # for student in students:
+    #     print(f"Student: {student.first_name} {student.last_name}")
+    #     print(f"Subjects:")
+    #     for subject in student.subjects:
+    #         print(f"  {subject.name}")
+    #         for teacher in subject.teachers:
+    #             print(f"    {teacher.first_name} {teacher.last_name}")
+    # print("--------------------------------")
 
     # students = session.query(Student).join(Subject).all()
     # for student in students:
