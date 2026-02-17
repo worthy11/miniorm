@@ -1,4 +1,4 @@
-from miniorm.orm_types import Relationship, ForeignKey, Column, Text, AssociationTable
+from miniorm.orm_types import Relationship, ForeignKey, Column, Text, Number, AssociationTable
 from miniorm.inheritance import STRATEGIES, Inheritance
 
 class Mapper:
@@ -149,6 +149,8 @@ class Mapper:
             
             fk = ForeignKey(target_mapper.table_name, target_mapper.pk, unique=rel.r_type == "one-to-one",
                             on_delete_cascade=getattr(rel, 'cascade_delete', True))
+            if name not in self.columns:
+                self.columns[name] = Number(nullable=True)
             self.columns[name].foreign_key = fk
             
             backref_name = rel.backref

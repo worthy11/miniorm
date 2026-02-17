@@ -56,8 +56,12 @@ class Session:
                 if hasattr(value, '_mapper'):
                     self.add(value)
                 if isinstance(value, list):
+                    rel = getattr(entity._mapper, 'relationships', {}).get(attr)
+                    fk_name = getattr(rel, '_resolved_fk_name', None) if rel else None
                     for item in value:
                         if hasattr(item, '_mapper'):
+                            if fk_name and rel and rel.r_type == "many-to-one":
+                                object.__setattr__(item, fk_name, entity)
                             self.add(item)
             self.unit_of_work.append(InsertTransaction(self, entity))
 

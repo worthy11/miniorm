@@ -79,23 +79,21 @@ class MiniBase:
         if name in mapper.relationships:
             rel = mapper.relationships[name]
             current_val = self.__dict__.get(name)
-            
-            is_loaded = False
-            if rel.r_type == "many-to-one":
+            if isinstance(current_val, list):
+                is_loaded = True
+            elif rel.r_type == "many-to-one":
                 is_loaded = current_val is not None and hasattr(current_val, '_orm_state')
             else:
-                is_loaded = isinstance(current_val, list)
+                is_loaded = False
 
             if not is_loaded:
                 if session:
                     value = self._load_relationship(session, rel)
                     object.__setattr__(self, name, value)
-                    # Update snapshot after loading M2M/collection so _flush_m2m can diff correctly
                     if rel.r_type in ("one-to-many", "many-to-many") and isinstance(value, list):
                         session._take_snapshot(self)
                     return value
                 else:
-                    # No session yet - return empty list for collections, None for many-to-one
                     if rel.r_type in ("one-to-many", "many-to-many"):
                         empty_list = []
                         object.__setattr__(self, name, empty_list)

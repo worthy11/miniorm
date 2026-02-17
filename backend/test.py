@@ -28,8 +28,8 @@ class Teacher(Person):
 class Subject(MiniBase):
     id = Number(pk=True)
     name = Text()
-    particpants = Relationship("Students", r_type="many-to-many", backref="subjects")
-    teachers = Relationship("Teachers", r_type="many-to-many", backref="subjects")
+    particpants = Relationship("Students", r_type="many-to-one", backref="subjects")
+    teachers = Relationship("Teachers", r_type="many-to-one", backref="subjects")
 
 
 db_path = "test.sqlite"
@@ -44,7 +44,7 @@ with Session(engine) as session:
     teacher1 = Teacher(first_name="Jan", last_name="Kowalski", salary=5000)
     teacher2 = Teacher(first_name="Anna", last_name="Sienkiewicz", salary=5000)
     
-    subject1.teachers = [teacher1]
+    subject1.teachers = [teacher2]
     subject2.teachers = [teacher1, teacher2]
     student1.subjects = [subject1, subject2]
     student2.subjects = [subject1]
@@ -55,23 +55,25 @@ with Session(engine) as session:
     student1.first_name = "Sylwia"
     session.commit()
 
-    # subjects = session.query(Subject).join(Teacher).filter(
-    #     Teacher.first_name == "Anna"
-    # ).all()
-    # for subject in subjects:
-    #     print(f"Subject: {subject.name}")
-    #     print(f"Teachers:")
-    #     for teacher in subject.teachers:
-    #         print(f"  {teacher.first_name} {teacher.last_name}")
-    # print("--------------------------------")
+    subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    for subject in subjects:
+        print(f"Subject: {subject.name}")
+        print(f"Students:")
+        particpants = subject.particpants
+        students = particpants if isinstance(particpants, list) else ([particpants] if particpants else [])
+        for student in students:
+            print(f"  {student.first_name} {student.last_name}")
+    print("--------------------------------")
 
-    # teachers = session.query(Teacher).join(Subject).all()
-    # for teacher in teachers:
-    #     print(f"Teacher: {teacher.first_name} {teacher.last_name}")
-    #     print(f"Subjects:")
-    #     for subject in teacher.subjects:
-    #         print(f"  {subject.name}")
-    # print("--------------------------------")
+    students = session.query(Student).join(Subject).join(Teacher).all()
+    for student in students:
+        print(f"Student: {student.first_name} {student.last_name}")
+        print(f"Subjects:")
+        for subject in student.subjects:
+            print(f"  {subject.name}")
+            for teacher in subject.teachers:
+                print(f"    {teacher.first_name} {teacher.last_name}")
+    print("--------------------------------")
 
     # students = session.query(Student).join(Subject).all()
     # for student in students:
@@ -106,20 +108,20 @@ with Session(engine) as session:
     # print("--------------------------------")
 
     # session.delete(student1)
-    session.delete(subject1)
-    session.commit()
+    # session.delete(subject1)
+    # session.commit()
 
-    students = session.query(Student).all()
-    for student in students:
-        print(f"Student: {student.first_name} {student.last_name}")
-        print(f"Subjects:")
-        for subject in student.subjects:
-            print(f"  {subject.name}")
-    print("--------------------------------")
+    # students = session.query(Student).all()
+    # for student in students:
+    #     print(f"Student: {student.first_name} {student.last_name}")
+    #     print(f"Subjects:")
+    #     for subject in student.subjects:
+    #         print(f"  {subject.name}")
+    # print("--------------------------------")
 
-    teachers = session.query(Teacher).all()
-    for teacher in teachers:
-        print(f"Teacher: {teacher.first_name} {teacher.last_name}")
-        print(f"Subjects:")
-        for subject in teacher.subjects:
-            print(f"  {subject.name}")
+    # teachers = session.query(Teacher).all()
+    # for teacher in teachers:
+    #     print(f"Teacher: {teacher.first_name} {teacher.last_name}")
+    #     print(f"Subjects:")
+    #     for subject in teacher.subjects:
+    #         print(f"  {subject.name}")
