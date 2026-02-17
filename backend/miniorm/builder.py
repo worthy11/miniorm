@@ -239,6 +239,8 @@ class QueryBuilder:
     def build_insert(self, table_name, data):
         table = self._quote(table_name)
         fields = list(data.keys())
+        if not fields:
+            raise ValueError(f"Cannot build INSERT for {table_name}: no columns in data {data!r}")
         quoted_fields = [self._quote(f) for f in fields]
         placeholders = ", ".join(["?" for _ in fields])
         values = [data[f] for f in fields]

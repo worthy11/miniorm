@@ -168,23 +168,19 @@ class Mapper:
         mapped_data = {}
         for col_name, col_obj in self.columns.items():
             val = entity.__dict__.get(col_name)
-
             if hasattr(val, '_mapper'):
                 pk_attr = val._mapper.pk
                 val = val.__dict__.get(pk_attr)
-            
             if isinstance(val, list):
                 val = None
-
-                if val is not None:
-                    mapped_data[attr] = val
-                elif self.columns[attr].default is not None:
-                    mapped_data[attr] = self.columns[attr].default
-                elif self.columns[attr].foreign_key:
-                    mapped_data[attr] = None
-                else:
-                    mapped_data[attr] = None
-
+            if val is not None:
+                mapped_data[col_name] = val
+            elif col_obj.default is not None:
+                mapped_data[col_name] = col_obj.default
+            elif col_obj.foreign_key:
+                mapped_data[col_name] = None
+            else:
+                mapped_data[col_name] = None
         return mapped_data
 
     def _get_mapper_for_table(self, table_name):
