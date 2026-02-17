@@ -162,10 +162,30 @@ class Query:
         to_check = [self.model_class._mapper]
         for rel in self._joins:
             if getattr(rel, "_resolved_target", None):
-                to_check.append(rel._resolved_target._mapper)
+                # For many-to-many, _resolved_target is always correct (both sides can join)
+                # For many-to-one backrefs, the actual joined table is local_table (where FK is)
+                if rel.r_type == "many-to-many":
+                    to_check.append(rel._resolved_target._mapper)
+                else:
+                    is_backref = getattr(rel, "local_table", None) and rel.local_table != rel._resolved_target._mapper.table_name
+                    if is_backref:
+                        from miniorm.base import MiniBase
+                        for cls in MiniBase._registry:
+                            if hasattr(cls, "_mapper") and cls._mapper.table_name == rel.local_table:
+                                to_check.append(cls._mapper)
+                                break
+                    else:
+                        to_check.append(rel._resolved_target._mapper)
         for mapper in to_check:
             for name, rel in mapper.relationships.items():
-                if getattr(rel, "_resolved_target", None) is target_cls or rel.remote_table == target_table:
+                resolved_target = getattr(rel, "_resolved_target", None)
+                if resolved_target is target_cls:
+                    self._joins.append(rel)
+                    if condition:
+                        self._joins.append(condition)
+                    return self
+                # Check remote_table (forward direction) or local_table (backref direction)
+                if rel.remote_table == target_table or getattr(rel, "local_table", None) == target_table:
                     self._joins.append(rel)
                     if condition:
                         self._joins.append(condition)

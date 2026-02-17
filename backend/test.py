@@ -42,44 +42,52 @@ with Session(engine) as session:
     # teacher1 = Teacher(first_name="Jan", last_name="Kowalski", salary=5000)
     # teacher2 = Teacher(first_name="Anna", last_name="Sienkiewicz", salary=5000)
     
-    session.add(subject1)
-    session.add(subject2)
-    session.commit()
+    results = session.query(Subject).join(Student).join(Teacher).all()
+    for result in results:
+        print(f"Student: {result.first_name} {result.last_name}")
+        print(f"Subjects:")
+        for subject in result.subjects:
+            print(f"  {subject.name}")
+        print("--------------------------------")
 
-    subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
-    for subject in subjects:
-        print(f"Subject: {subject.name}")
-        print(f"Students:")
-        participants = subject.participants
-        for participant in participants:
-            print(f"  {participant.first_name} {participant.last_name}")
-    print("--------------------------------")
+    # session.add(subject1)
+    # session.add(subject2)
+    # session.commit()
+
+    # subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    # for subject in subjects:
+    #     print(f"Subject: {subject.name}")
+    #     print(f"Students:")
+    #     participants = subject.participants
+    #     for participant in participants:
+    #         print(f"  {participant.first_name} {participant.last_name}")
+    # print("--------------------------------")
 
 
 
-    student1 = Student(first_name="Karolina", last_name="Nowak", age=22, index=12345) 
-    subject1.participants.append(student1)
-    session.commit()
+    # student1 = Student(first_name="Karolina", last_name="Nowak", age=22, index=12345) 
+    # subject1.participants.append(student1)
+    # session.commit()
     
-    subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
-    for subject in subjects:
-        print(f"Subject: {subject.name}")
-        print(f"Students:")
-        participants = subject.participants
-        for participant in participants:
-            print(f"  {participant.first_name} {participant.last_name}")
-    print("--------------------------------")
+    # subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    # for subject in subjects:
+    #     print(f"Subject: {subject.name}")
+    #     print(f"Students:")
+    #     participants = subject.participants
+    #     for participant in participants:
+    #         print(f"  {participant.first_name} {participant.last_name}")
+    # print("--------------------------------")
 
-    session.delete(student1)
-    session.commit()
-    subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
-    for subject in subjects:
-        print(f"Subject: {subject.name}")
-        print(f"Students:") 
-        participants = subject.participants
-        for participant in participants:
-            print(f"  {participant.first_name} {participant.last_name}")
-    print("--------------------------------")
+    # session.delete(student1)
+    # session.commit()
+    # subjects = session.query(Subject).filter(Subject.name == "Mathematics").all()
+    # for subject in subjects:
+    #     print(f"Subject: {subject.name}")
+    #     print(f"Students:") 
+    #     participants = subject.participants
+    #     for participant in participants:
+    #         print(f"  {participant.first_name} {participant.last_name}")
+    # print("--------------------------------")
     
     # student2 = Student(first_name="Maciej", last_name="Jakubowski", age=23, index=12346) 
     # subject2.participant = student2

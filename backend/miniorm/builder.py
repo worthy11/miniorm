@@ -39,15 +39,42 @@ class QueryBuilder:
             for i, rel in enumerate(joins):
                 if not getattr(rel, "_resolved_target", None):
                     continue
-                target_mapper = rel._resolved_target._mapper
+                
+                # For many-to-many, _resolved_target is always correct (bidirectional relationship)
+                # For many-to-one/one-to-many, check if backref
+                if rel.r_type == "many-to-many":
+                    target_mapper = rel._resolved_target._mapper
+                    is_backref = False
+                else:
+                    is_backref = getattr(rel, "local_table", None) and rel.local_table != left_mapper.table_name
+                    if is_backref:
+                        # For backref, target is the table that has the FK (local_table), not _resolved_target
+                        from miniorm.base import MiniBase
+                        target_mapper = None
+                        for cls in MiniBase._registry:
+                            if hasattr(cls, "_mapper") and cls._mapper.table_name == rel.local_table:
+                                target_mapper = cls._mapper
+                                break
+                        if not target_mapper:
+                            continue
+                    else:
+                        target_mapper = rel._resolved_target._mapper
+                
                 remote_pk = self._quote(target_mapper.pk)
                 local_pk = self._quote(left_mapper.pk)
 
                 # 1) Add relationship join first (so target table is in the query before inheritance joins)
                 if rel.r_type == "many-to-one":
-                    local_fk = self._quote(rel._resolved_fk_name)
-                    target_table = self._quote(target_mapper.table_name)
-                    all_joins.append(f'JOIN {target_table} ON {left_table}.{local_fk} = {target_table}.{remote_pk}')
+                    if is_backref:
+                        # Backref: FK is on the target table, join target ON target.fk = left.pk
+                        local_fk = self._quote(rel._resolved_fk_name)
+                        target_table = self._quote(target_mapper.table_name)
+                        all_joins.append(f'JOIN {target_table} ON {target_table}.{local_fk} = {left_table}.{local_pk}')
+                    else:
+                        # Forward: FK is on left table, join target ON left.fk = target.pk
+                        local_fk = self._quote(rel._resolved_fk_name)
+                        target_table = self._quote(target_mapper.table_name)
+                        all_joins.append(f'JOIN {target_table} ON {left_table}.{local_fk} = {target_table}.{remote_pk}')
                 elif rel.r_type == "one-to-many":
                     remote_fk = self._quote(rel._resolved_fk_name)
                     target_table = self._quote(target_mapper.table_name)
@@ -89,7 +116,8 @@ class QueryBuilder:
                     for col in cols_copy:
                         if col not in cols:
                             cols[col] = tbl_ref
-                        model_col_to_table[(rel._resolved_target, col)] = tbl_ref
+                        target_cls = target_mapper.cls if is_backref else rel._resolved_target
+                        model_col_to_table[(target_cls, col)] = tbl_ref
                         select_list.append((tbl_ref, col))
 
                 left_mapper = target_mapper
