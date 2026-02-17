@@ -2,6 +2,11 @@ class FilterExpression:
     def __invert__(self):
         return NotFilter(self)
 
+class OrderByExpression:
+    def __init__(self, column_name, direction="ASC", model_class=None):
+        self.column_name = column_name
+        self.direction = direction.upper()
+        self.model_class = model_class
 
 class ColumnFilter(FilterExpression):
     """Represents a column that can be used in filter expressions"""
@@ -64,6 +69,12 @@ class ColumnFilter(FilterExpression):
     def between(self, lower, upper):
         """BETWEEN operator"""
         return BetweenFilter(self.column_name, lower, upper, self.model_class)
+    
+    def asc(self):
+        return OrderByExpression(self.column_name, "ASC", self.model_class)
+
+    def desc(self):
+        return OrderByExpression(self.column_name, "DESC", self.model_class)
 
 
 class ComparisonFilter(FilterExpression):

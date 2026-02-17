@@ -92,7 +92,7 @@ class ClassTableInheritance(InheritanceStrategy):
 
     def resolve_select(self, mapper):
         columns = {}
-        columns[mapper.table_name] = mapper.columns
+        columns[mapper.table_name] = dict(mapper.columns)
         if mapper.parent:
             columns[mapper.table_name]["_join"] = (mapper.parent.table_name, mapper.pk, mapper.parent.pk)
             columns.update(self.resolve_select(mapper.parent))

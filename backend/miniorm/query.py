@@ -1,7 +1,7 @@
 from miniorm.base import MiniBase
 from miniorm.orm_types import Column
 from miniorm.states import ObjectState
-from miniorm.filters import FilterExpression
+from miniorm.filters import FilterExpression, OrderByExpression, ColumnFilter
 
 class Query:
     def __init__(self, model_class, session):

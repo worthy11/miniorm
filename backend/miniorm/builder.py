@@ -138,14 +138,22 @@ class QueryBuilder:
                     direction = item.direction
                     
                     if item.model_class:
-                        table_name = item.model_class._mapper.table_name
+                        target_mapper = item.model_class._mapper
+                        table_name = target_mapper.table_name
+                        
+                        curr = target_mapper
+                        while curr:
+                            if column in curr.columns:
+                                table_name = curr.table_name
+                                break
+                            curr = curr.parent
                     else:
                         table_name = cols.get(column, mapper.table_name)
                 else:
                     column, direction = item
                     table_name = cols.get(column, mapper.table_name)
 
-                prefixed_col = f"{table_name}.{self._quote(column)}"
+                prefixed_col = f"{self._quote(table_name)}.{self._quote(column)}"
                 order_clauses.append(f"{prefixed_col} {direction}")
             
             sql += " ORDER BY " + ", ".join(order_clauses)
