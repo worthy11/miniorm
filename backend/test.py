@@ -28,8 +28,8 @@ class Teacher(Person):
 class Subject(MiniBase):
     id = Number(pk=True)
     name = Text()
-    participants = Relationship("Students", r_type="many-to-many", backref="subjects")
-    teachers = Relationship("Teachers", r_type="many-to-many", backref="subjects")
+    participants = Relationship("Students", r_type="many-to-one", backref="subjects")
+    teachers = Relationship("Teachers", r_type="many-to-one", backref="subjects")
 
 
 db_path = "test.sqlite"
@@ -42,7 +42,9 @@ with Session(engine) as session:
     # teacher1 = Teacher(first_name="Jan", last_name="Kowalski", salary=5000)
     # teacher2 = Teacher(first_name="Anna", last_name="Sienkiewicz", salary=5000)
     
-    results = session.query(Subject).join(Student).join(Teacher).all()
+    results = session.query(Student).join(Subject).join(Teacher).filter(
+        and_(Subject.name == "A"), Teacher.first_name == "Jan", Student.first_name == "Karolina"
+    ).all()
     for result in results:
         print(f"Student: {result.first_name} {result.last_name}")
         print(f"Subjects:")
